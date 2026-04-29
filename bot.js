@@ -1,6 +1,7 @@
 require('./keep_alive.js');
-const fs = require('fs');
-const path = require('path');
+const db = require('./db.js'); // Import the database module
+
+// Removed fs and path as they are no longer needed for familyData.json
 const { 
     Client, 
     GatewayIntentBits, 
@@ -20,7 +21,6 @@ const axios = require('axios');
 
 require('dotenv').config();
 
-const DATA_FILE = path.join(__dirname, 'familyData.json');
 const PREFIX = process.env.PREFIX || ',';
 
 const ROLES_LIST = [
@@ -29,74 +29,9 @@ const ROLES_LIST = [
     'grand-père', 'grand-mère', 'amoureux'
 ];
 
-function loadData() {
-    if (!fs.existsSync(DATA_FILE)) {
-        fs.writeFileSync(DATA_FILE, JSON.stringify({ users: {}, families: {} }, null, 2));
-    }
-
-    try {
-        const data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8') || '{}');
-        if (!data.users) data.users = {};
-        if (!data.families) data.families = {};
-        return data;
-    } catch (error) {
-        console.error('Failed to load data file, resetting it.', error);
-        const data = { users: {}, families: {} };
-        saveData(data);
-        return data;
-    }
-}
-
-function saveData(data) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-}
-
-function ensureUser(data, userId) {
-    if (!data.users[userId]) {
-        data.users[userId] = {
-            spouse: null,
-            children: [],
-            parents: [],
-            customLinks: {},
-            familyName: null, // New field for family name
-            bio: "",
-            gender: null // masculin, féminin, autre
-        };
-    }
-    return data.users[userId];
-}
-
 // Clears all family links for a given user
-function clearUserFamilyLinks(data, userId) {
-    const userData = ensureUser(data, userId);
-    // If the user was part of a family, remove them from that family's members list
-    if (userData.familyName && data.families[userData.familyName]) {
-        data.families[userData.familyName].members = data.families[userData.familyName].members.filter(id => id !== userId);
-        // If the user was the head of the family, and the family is now empty, delete the family
-        if (data.families[userData.familyName].head === userId && data.families[userData.familyName].members.length === 0) {
-            delete data.families[userData.familyName];
-        } else if (data.families[userData.familyName].head === userId && data.families[userData.familyName].members.length > 0) {
-            const family = data.families[userData.familyName];
-            // Logique de délégation : on cherche les membres au niveau générationnel le plus haut (sans parents dans la famille)
-            const potentialHeads = family.members.filter(mId => {
-                const mData = data.users[mId];
-                return !mData.parents.some(pId => family.members.includes(pId));
-            });
-
-            if (potentialHeads.length > 0) {
-                // S'il y a plusieurs membres au même niveau (ex: Grand-Père et Grand-Mère), le hasard s'y joue
-                family.head = potentialHeads[Math.floor(Math.random() * potentialHeads.length)];
-            } else {
-                // Fallback si la hiérarchie est circulaire ou incomplète
-                family.head = family.members[Math.floor(Math.random() * family.members.length)];
-            }
-        }
-    }
-    userData.spouse = null;
-    userData.children = [];
-    userData.parents = [];
-    userData.customLinks = {};
-    userData.familyName = null; // Also clear family name
+async function clearUserFamilyLinks(userId) {
+    await db.clearUserFamilyLinksDB(userId);
 }
 
 function formatMention(id) {
@@ -136,9 +71,9 @@ async function updateUBBalance(guildId, userId, cashDelta) {
 
 // --- Visual Tree Generator ---
 async function generateFamilyImage(client, data, userId) {
-    const canvas = createCanvas(800, 450);
+    const canvas = createCanvas(800, 450); // Canvas size
     const ctx = canvas.getContext('2d');
-    const userData = ensureUser(data, userId);
+    const userData = await db.getOrCreateUser(userId); // Fetch user data from DB
     
     ctx.fillStyle = '#2c2f33';
     ctx.fillRect(0, 0, 800, 450);
@@ -205,47 +140,47 @@ async function generateFamilyImage(client, data, userId) {
     return canvas.toBuffer();
 }
 
-// function buildFamilySection removed as we use visual tree now
-
-function getExtendedFamily(data, userId) {
-    const user = ensureUser(data, userId);
+// This function now needs to be async as it fetches data from DB
+async function getExtendedFamily(userId) {
+    const user = await db.getOrCreateUser(userId);
     const siblings = new Set();
     const grandparents = new Set();
     const unclesAunts = new Set();
     const cousins = new Set();
 
     // Siblings & Grandparents logic
-    user.parents.forEach(pId => {
-        const parentData = ensureUser(data, pId);
-        parentData.children.forEach(cId => {
+    for (const pId of user.parents) {
+        const parentData = await db.getOrCreateUser(pId);
+        for (const cId of parentData.children) {
             if (cId !== userId) siblings.add(cId);
-        });
-        parentData.parents.forEach(gpId => {
+        }
+        for (const gpId of parentData.parents) {
             grandparents.add(gpId);
-        });
-    });
+        }
+    }
 
-    // Uncles/Aunts logic (siblings of parents)
-    user.parents.forEach(pId => {
-        const parentData = ensureUser(data, pId);
-        parentData.parents.forEach(gpId => {
-            const gpData = ensureUser(data, gpId);
-            gpData.children.forEach(siblingOfParentId => {
+    // Uncles/Aunts & Cousins logic
+    for (const pId of user.parents) {
+        const parentData = await db.getOrCreateUser(pId);
+        for (const gpId of parentData.parents) {
+            const gpData = await db.getOrCreateUser(gpId);
+            for (const siblingOfParentId of gpData.children) {
                 if (siblingOfParentId !== pId) {
                     unclesAunts.add(siblingOfParentId);
                     // Cousins (children of uncles/aunts)
-                    const uaData = ensureUser(data, siblingOfParentId);
-                    uaData.children.forEach(cousinId => cousins.add(cousinId));
+                    const uaData = await db.getOrCreateUser(siblingOfParentId);
+                    for (const cousinId of uaData.children) {
+                        cousins.add(cousinId);
+                    }
                 }
-            });
-        });
-    });
-
+            }
+        }
+    }
     return { siblings, grandparents, unclesAunts, cousins };
 }
 
 // Fonction pour trouver le rôle réciproque (ex: si je suis ton frère, tu es mon frère/soeur)
-function getReverseRole(role, targetData = null) {
+async function getReverseRole(role, targetData = null) { // Made async as targetData might be fetched
     const gender = targetData?.gender;
     const mapping = {
         'frère': gender === 'féminin' ? 'soeur' : 'frère',
@@ -267,40 +202,44 @@ function getReverseRole(role, targetData = null) {
 }
 
 // Gère la propagation du nom de famille aux descendants non mariés et sans enfants
-function propagateNameChange(data, userId, oldName, newName) {
-    const user = data.users[userId];
+async function propagateNameChange(userId, oldName, newName) { // No longer needs `data`
+    const user = await db.getOrCreateUser(userId);
     if (!user) return;
 
-    user.children.forEach(childId => {
-        const child = data.users[childId];
+    for (const childId of user.children) {
+        const child = await db.getOrCreateUser(childId);
         if (child && child.familyName === oldName) {
             // Logique : On ne change le nom que si l'enfant n'est pas marié et n'a pas d'enfants
             if (!child.spouse && child.children.length === 0) {
-                child.familyName = newName;
+                await db.updateUser(childId, { familyName: newName });
                 // Mise à jour du registre de famille
-                if (data.families[newName] && !data.families[newName].members.includes(childId)) {
-                    data.families[newName].members.push(childId);
+                const newFamily = await db.getFamily(newName);
+                if (newFamily && !newFamily.members.includes(childId)) {
+                    newFamily.members.push(childId);
+                    await db.updateFamily(newName, { members: newFamily.members });
                 }
                 // Remove from old family members if it was there
-                if (oldName && data.families[oldName]) {
-                    data.families[oldName].members = data.families[oldName].members.filter(id => id !== childId);
+                const oldFamily = await db.getFamily(oldName);
+                if (oldFamily) {
+                    oldFamily.members = oldFamily.members.filter(id => id !== childId);
+                    await db.updateFamily(oldName, { members: oldFamily.members });
                 }
-                propagateNameChange(data, childId, oldName, newName);
+                await propagateNameChange(childId, oldName, newName);
             }
         }
-    });
+    }
 }
 
-function areRelated(data, id1, id2) {
+async function areRelated(id1, id2) { // Made async
     if (id1 === id2) return 'soi-même';
-    const u1 = ensureUser(data, id1);
+    const u1 = await db.getOrCreateUser(id1);
     
     if (u1.customLinks && u1.customLinks[id2]) return u1.customLinks[id2];
     if (u1.spouse === id2) return 'conjoint(e)';
     if (u1.parents.includes(id2)) return 'parent';
     if (u1.children.includes(id2)) return 'enfant';
 
-    const ext = getExtendedFamily(data, id1);
+    const ext = await getExtendedFamily(id1); // Call async version
     if (ext.siblings.has(id2)) return 'frère/soeur';
     if (ext.grandparents.has(id2)) return 'grand-parent';
     if (ext.unclesAunts.has(id2)) return 'oncle/tante';
@@ -310,24 +249,26 @@ function areRelated(data, id1, id2) {
 }
 
 // Function to get all members of a family
-function getFamilyMembers(data, familyName) {
+async function getFamilyMembers(familyName) { // Made async
     const normalizedFamilyName = familyName.toLowerCase();
-    if (data.families[normalizedFamilyName]) {
-        return data.families[normalizedFamilyName].members;
+    const family = await db.getFamily(normalizedFamilyName);
+    if (family) {
+        return family.members;
     }
     return [];
 }
 
 // Function to get the head of a family
-function getFamilyHead(data, familyName) {
+async function getFamilyHead(familyName) { // Made async
     const normalizedFamilyName = familyName.toLowerCase();
-    return data.families[normalizedFamilyName] ? data.families[normalizedFamilyName].head : null;
+    const family = await db.getFamily(normalizedFamilyName);
+    return family ? family.head : null;
 }
 
 // New function to merge two families
-function mergeFamilies(data, inviterFamilyName, invitedFamilyName, inviterId, invitedId, role) {
-    const inviterFamily = data.families[inviterFamilyName];
-    const invitedFamily = data.families[invitedFamilyName];
+async function mergeFamilies(inviterFamilyName, invitedFamilyName, inviterId, invitedId, role) { // Made async
+    const inviterFamily = await db.getFamily(inviterFamilyName);
+    const invitedFamily = await db.getFamily(invitedFamilyName);
 
     if (!inviterFamily || !invitedFamily) {
         console.error("Attempted to merge non-existent families.");
@@ -335,54 +276,66 @@ function mergeFamilies(data, inviterFamilyName, invitedFamilyName, inviterId, in
     }
 
     // Add all members of the invited family to the inviter's family
-    invitedFamily.members.forEach(memberId => {
+    for (const memberId of invitedFamily.members) {
         if (!inviterFamily.members.includes(memberId)) {
             inviterFamily.members.push(memberId);
         }
         // Update each member's familyName
-        const memberData = ensureUser(data, memberId);
-        memberData.familyName = inviterFamilyName;
-    });
+        await db.updateUser(memberId, { familyName: inviterFamilyName });
+    }
+    await db.updateFamily(inviterFamilyName, { members: inviterFamily.members });
 
     // Pont relationnel logique
-    const inviter = ensureUser(data, inviterId);
-    const invited = ensureUser(data, invitedId);
+    const inviter = await db.getOrCreateUser(inviterId);
+    const invited = await db.getOrCreateUser(invitedId);
 
     if (role === 'oncle' || role === 'tante') {
         // La cible devient le frère/soeur d'un des parents de l'inviteur
         if (inviter.parents.length > 0) {
             const parentId = inviter.parents[0];
-            const pData = data.users[parentId];
+            const pData = await db.getOrCreateUser(parentId);
             if (pData && pData.parents.length > 0) {
                 // On donne à l'invité les mêmes parents que le parent de l'inviteur (les grands-parents)
-                invited.parents = [...pData.parents];
-                pData.parents.forEach(gpId => {
-                    const gpData = data.users[gpId];
-                    if (gpData && !gpData.children.includes(invitedId)) gpData.children.push(invitedId);
-                });
+                await db.updateUser(invitedId, { parents: [...pData.parents] });
+                for (const gpId of pData.parents) {
+                    const gpData = await db.getOrCreateUser(gpId);
+                    if (gpData && !gpData.children.includes(invitedId)) {
+                        gpData.children.push(invitedId);
+                        await db.updateUser(gpId, { children: gpData.children });
+                    }
+                }
             }
         }
     } else if (role === 'frère' || role === 'soeur') {
         // La cible partage les mêmes parents que l'inviteur
         if (inviter.parents.length > 0) {
-            invited.parents = [...inviter.parents];
-            inviter.parents.forEach(pId => {
-                const pData = data.users[pId];
-                if (pData && !pData.children.includes(invitedId)) pData.children.push(invitedId);
-            });
+            await db.updateUser(invitedId, { parents: [...inviter.parents] });
+            for (const pId of inviter.parents) {
+                const pData = await db.getOrCreateUser(pId);
+                if (pData && !pData.children.includes(invitedId)) {
+                    pData.children.push(invitedId);
+                    await db.updateUser(pId, { children: pData.children });
+                }
+            }
         }
     } else if (role === 'grand-père' || role === 'grand-mère') {
         // La cible devient le parent d'un des parents de l'inviteur
         if (inviter.parents.length > 0) {
             const parentId = inviter.parents[0];
-            const pData = data.users[parentId];
-            if (pData && !pData.parents.includes(invitedId)) pData.parents.push(invitedId);
-            if (invited && !invited.children.includes(parentId)) invited.children.push(parentId);
+            const pData = await db.getOrCreateUser(parentId);
+            if (pData && !pData.parents.includes(invitedId)) {
+                pData.parents.push(invitedId);
+                await db.updateUser(parentId, { parents: pData.parents });
+            }
+            if (invited && !invited.children.includes(parentId)) {
+                invited.children.push(parentId);
+                await db.updateUser(invitedId, { children: invited.children });
+            }
         }
     }
 
     // Remove the invited family
-    delete data.families[invitedFamilyName];
+    await db.deleteFamily(invitedFamilyName);
 }
 
 const client = new Client({
@@ -393,43 +346,57 @@ const client = new Client({
         GatewayIntentBits.GuildMembers
     ]
 });
-// --- Logique de modification des liens ---
-function executeLinkChange(data, id1, id2, role, action) {
-    const d1 = ensureUser(data, id1);
-    const d2 = ensureUser(data, id2);
+// --- Logique de modification des liens --- (Now async)
+async function executeLinkChange(id1, id2, role, action) { // No longer needs `data`
+    const d1 = await db.getOrCreateUser(id1);
+    const d2 = await db.getOrCreateUser(id2);
 
     // Nettoyage systématique des anciens liens entre ces deux personnes
+    let d1Update = {};
+    let d2Update = {};
+
     if (d1.spouse === id2) { d1.spouse = null; d2.spouse = null; }
-    d1.children = d1.children.filter(id => id !== id2);
-    d2.parents = d2.parents.filter(id => id !== id1);
-    d1.parents = d1.parents.filter(id => id !== id2);
-    d2.children = d2.children.filter(id => id !== id1);
+    d1Update.children = d1.children.filter(id => id !== id2);
+    d2Update.parents = d2.parents.filter(id => id !== id1);
+    d1Update.parents = d1.parents.filter(id => id !== id2);
+    d2Update.children = d2.children.filter(id => id !== id1);
 
     // Ensure customLinks exist before trying to delete
     if (d1.customLinks && d1.customLinks[id2]) {
-        delete d1.customLinks[id2];
+        const newCustomLinks = { ...d1.customLinks };
+        delete newCustomLinks[id2];
+        d1Update.customLinks = newCustomLinks;
     }
     if (d2.customLinks && d2.customLinks[id1]) {
-        delete d2.customLinks[id1];
+        const newCustomLinks = { ...d2.customLinks };
+        delete newCustomLinks[id1];
+        d2Update.customLinks = newCustomLinks;
     }
 
-    if (action === 'remove') return;
+    if (action === 'remove') {
+        await db.updateUser(id1, d1Update);
+        await db.updateUser(id2, d2Update);
+        return;
+    }
 
     if (role === 'conjoint') {
-        d1.spouse = id2; d2.spouse = id1;
+        d1Update.spouse = id2; d2Update.spouse = id1;
     } else if (role === 'parent') {
-        if (!d1.parents.includes(id2)) d1.parents.push(id2);
-        if (!d2.children.includes(id1)) d2.children.push(id1);
+        if (!d1Update.parents.includes(id2)) d1Update.parents.push(id2);
+        if (!d2Update.children.includes(id1)) d2Update.children.push(id1);
     } else if (role === 'enfant') {
-        if (!d1.children.includes(id2)) d1.children.push(id2);
-        if (!d2.parents.includes(id1)) d2.parents.push(id1);
+        if (!d1Update.children.includes(id2)) d1Update.children.push(id2);
+        if (!d2Update.parents.includes(id1)) d2Update.parents.push(id1);
     } else {
-        d1.customLinks[id2] = role;
-        d2.customLinks[id1] = getReverseRole(role, d1);
+        d1Update.customLinks = { ...(d1Update.customLinks || d1.customLinks), [id2]: role };
+        d2Update.customLinks = { ...(d2Update.customLinks || d2.customLinks), [id1]: await getReverseRole(role, d1) };
     }
+
+    await db.updateUser(id1, d1Update);
+    await db.updateUser(id2, d2Update);
 }
 
-async function startFamilyVote(interaction, author, target, role, action, data) {
+async function startFamilyVote(interaction, author, target, role, action) { // No longer needs `data`
     const voteEmbed = new EmbedBuilder()
         .setTitle("🗳️ Vote de la Communauté")
         .setColor("#f1c40f")
@@ -796,9 +763,10 @@ client.on('messageCreate', async (message) => {
             await message.channel.sendTyping();
             const familyWealths = [];
             const processedFamilyUnits = new Set();
+            const allUsers = await db.getAllUsers(); // Fetch all users once
 
-            for (const userId of Object.keys(data.users)) {
-                const userData = ensureUser(data, userId);
+            for (const userId of Object.keys(allUsers)) {
+                const userData = allUsers[userId]; // Use pre-fetched user data
                 let canonicalId = userData.spouse ? [userId, userData.spouse].sort()[0] : userId;
                 if (processedFamilyUnits.has(canonicalId)) continue;
                 processedFamilyUnits.add(canonicalId);
@@ -960,7 +928,7 @@ client.on('messageCreate', async (message) => {
 
         case 'pat': {
             if (!target) return message.reply('Qui veux-tu tapoter ?');
-            const rel = areRelated(data, authorId, target.id);
+            const rel = await areRelated(authorId, target.id); // Await async areRelated
             let desc = `${formatMention(authorId)} tapote la tête de ${formatMention(target.id)}.`;
             if (['enfant', 'parent', 'frère/soeur'].includes(rel)) {
                 desc = `😊 ${formatMention(authorId)} tapote affectueusement la tête de son **${rel}**, ${formatMention(target.id)}.`;
@@ -974,7 +942,7 @@ client.on('messageCreate', async (message) => {
 
         case 'slap': {
             if (!target) return message.reply('Qui veux-tu gifler ?');
-            const rel = areRelated(data, authorId, target.id);
+            const rel = await areRelated(authorId, target.id); // Await async areRelated
             let desc = `💥 ${formatMention(authorId)} donne une gifle à ${formatMention(target.id)} !`;
             if (rel && rel !== 'soi-même') desc += ` Oh non, une dispute de famille entre **${rel}s** !`;
             
@@ -987,7 +955,7 @@ client.on('messageCreate', async (message) => {
 
         case 'poke': {
             if (!target) return message.reply('Qui veux-tu titiller ?');
-            const rel = areRelated(data, authorId, target.id);
+            const rel = await areRelated(authorId, target.id); // Await async areRelated
             let desc = `${formatMention(authorId)} donne un petit coup de doigt à ${formatMention(target.id)}.`;
             if (rel && rel !== 'soi-même') desc = `👉 ${formatMention(authorId)} embête son **${rel}**, ${formatMention(target.id)} !`;
 

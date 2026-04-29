@@ -10,7 +10,8 @@
     "discord.js": "^14.16.3",
     "canvas": "^2.11.2",
     "axios": "^1.7.7",
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "mongodb": "^6.8.0"
   },
   "engines": {
     "node": ">=18.0.0"
