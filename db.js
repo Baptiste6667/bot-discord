@@ -95,18 +95,21 @@ async function clearUserFamilyLinksDB(userId) {
         if (family.members.length === 0) {
           await deleteFamily(family._id);
         } else {
-          // Logique de délégation : on cherche les membres au niveau générationnel le plus haut
-          // Correction du filtre asynchrone
-          const results = await Promise.all(family.members.map(async mId => {
-            const mData = await getOrCreateUser(mId);
-            const hasParentInFamily = mData.parents.some(pId => family.members.includes(pId));
-            return { mId, isPotential: !hasParentInFamily };
-          }));
-          
-          const potentialHeads = results.filter(r => r.isPotential).map(r => r.mId);
+            // Logique de succession : on cherche les membres sans parents dans la famille (les plus "vieux")
+            const results = await Promise.all(family.members.map(async mId => {
+                const mData = await getOrCreateUser(mId);
+                const hasParentInFamily = mData.parents.some(pId => family.members.includes(pId));
+                return { mId, isPotential: !hasParentInFamily };
+            }));
+            
+            const potentialHeads = results.filter(r => r.isPotential).map(r => r.mId);
 
-          family.head = potentialHeads.length > 0 ? potentialHeads[Math.floor(Math.random() * potentialHeads.length)] : family.members[Math.floor(Math.random() * family.members.length)];
-          await updateFamily(family._id, { head: family.head, members: family.members });
+            if (potentialHeads.length > 0) {
+                family.head = potentialHeads[Math.floor(Math.random() * potentialHeads.length)];
+            } else {
+                family.head = family.members[Math.floor(Math.random() * family.members.length)];
+            }
+            await updateFamily(family._id, { head: family.head, members: family.members });
         }
       } else {
         await updateFamily(family._id, { members: family.members });

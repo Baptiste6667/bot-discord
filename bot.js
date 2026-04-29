@@ -516,277 +516,201 @@ client.on('messageCreate', async (message) => {
     let response = null;
 
     switch (command) {
-        case 'adminfamily':
-        case 'family': {
-            const isAdminCmd = command === 'adminfamily';
-            if (isAdminCmd && !message.member.permissions.has(PermissionFlagsBits.Administrator)) return message.reply("❌ Admin uniquement.");
+        case 'adminfamily': {
+            if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) return message.reply("❌ Admin uniquement.");
+            const familyName = args.join(' ');
+            if (!familyName) return message.reply(`Usage: ${PREFIX}adminfamily <Nom de la famille>`);
 
-            if (args.length > 0 && !isAdminCmd) { // Check for family name argument for !family <FamilyName>
-                await message.channel.sendTyping();
-                const inputName = args.join(' ').toLowerCase();
-                
-                let targetId = target ? target.id : null;
-                let title = `Arbre de ${target ? target.username : inputName}`;
+            const family = await db.getFamily(familyName);
+            if (!family) return message.reply(`❌ Famille "${familyName}" introuvable.`);
 
-                // Si ce n'est pas une mention, on cherche par nom de famille
-                const family = await db.getFamily(inputName);
-                if (!targetId && family) {
-                    targetId = family.head;
-                    title = `Arbre de la famille ${inputName.toUpperCase()}`;
-                } else if (!targetId) {
-                    return message.reply(`❌ La famille ou l'utilisateur "${inputName}" est introuvable.`);
-                }
+            const embed = new EmbedBuilder()
+                .setTitle(`🛠️ Admin : Famille ${familyName.toUpperCase()}`)
+                .setColor("#e74c3c")
+                .setDescription("Sélectionnez une action administrative.");
 
-                try {
-                    const buffer = await generateFamilyImage(client, targetId);
-                    const attachment = new AttachmentBuilder(buffer, { name: 'family-tree.png' });
-                    const ext = await getExtendedFamily(targetId);
-                    const embed = new EmbedBuilder()
-                        .setTitle(title)
-                        .setImage('attachment://family-tree.png')
-                        .addFields(
-                            { name: 'Fratrie', value: Array.from(ext.siblings).map(formatMention).join(', ') || 'Aucun', inline: true },
-                            { name: 'Cousins', value: Array.from(ext.cousins).map(formatMention).join(', ') || 'Aucun', inline: true }
-                        );
-                    return message.reply({ embeds: [embed], files: [attachment] });
-                } catch (err) {
-                    return message.reply("❌ Erreur lors de la génération de l'arbre.");
-                }
-            }
-
-            const dashboard = new EmbedBuilder()
-                .setTitle(isAdminCmd ? "🛠️ Administration Family" : "🏠 Dashboard Familial")
-                .setColor(isAdminCmd ? "#e74c3c" : "#5865F2")
-                .setDescription(isAdminCmd ? "Modifiez n'importe quel lien entre deux membres." : "Gérez vos relations via le menu ci-dessous.");
-
-            const actionMenu = new ActionRowBuilder().addComponents(
-                new StringSelectMenuBuilder().setCustomId('a').setPlaceholder('Action...')
+            const row = new ActionRowBuilder().addComponents(
+                new StringSelectMenuBuilder().setCustomId('admin_action').setPlaceholder('Action...')
                     .addOptions([
-                        { label: 'Ajouter un membre', value: 'add', description: 'Invitation directe' },
-                        { label: 'Modifier la place', value: 'modify', description: 'Nécessite un vote' },
-                        { label: 'Enlever un membre', value: 'remove', description: 'Nécessite un vote' }
-                    ].concat(isAdminCmd ? [{ label: 'Réinitialiser', value: 'clear', description: 'Effacer tout l\'arbre' }] : []))
+                        { label: 'Ajouter/Modifier un membre', value: 'add' },
+                        { label: 'Supprimer un membre', value: 'remove' },
+                        { label: 'Réinitialiser la famille', value: 'clear' },
+                        { label: 'Annuler', value: 'cancel' }
+                    ])
             );
 
-            const msg = await message.reply({ embeds: [dashboard], components: [actionMenu] });
-            const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 60000 });
+            const msg = await message.reply({ embeds: [embed], components: [row] });
+            const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
 
-            collector.on('collect', async (i) => {
+            coll.on('collect', async (i) => {
+                if (i.values[0] === 'cancel') return coll.stop();
+                if (i.values[0] === 'clear') {
+                    for (const mId of family.members) await db.updateUser(mId, { familyName: null, spouse: null, children: [], parents: [] });
+                    await db.deleteFamily(familyName);
+                    return i.update({ content: `✅ Famille ${familyName} supprimée.`, components: [], embeds: [] });
+                }
+
                 const action = i.values[0];
-                const userSelect = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('u1').setPlaceholder(isAdminCmd ? 'Membre 1...' : 'Cible...'));
-                await i.update({ content: `Action: **${action}**. Sélectionnez le membre :`, components: [userSelect], embeds: [] });
+                const uSelect = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('target').setPlaceholder('Choisir le membre...'));
+                await i.update({ content: `Action: ${action}. Sélectionnez le membre.`, components: [uSelect] });
 
-                const u1Coll = msg.createMessageComponentCollector({ componentType: ComponentType.UserSelect, time: 60000 });
-                u1Coll.on('collect', async (ui) => {
-                    const s1Id = ui.values[0];
-                    const s1User = await client.users.fetch(s1Id);
-                    if (action === 'clear') {
-                        await db.updateUser(s1Id, { spouse: null, children: [], parents: [], customLinks: {}, familyName: null, bio: "", gender: null });
-                        return ui.update({ content: `✅ Arbre de ${s1User} effacé.`, components: [] });
+                const uColl = msg.createMessageComponentCollector({ componentType: ComponentType.UserSelect, time: 30000 });
+                uColl.on('collect', async (ui) => {
+                    const targetId = ui.values[0];
+                    if (action === 'remove') {
+                        await executeLinkChange(family.head, targetId, null, 'remove');
+                        return ui.update({ content: `✅ Membre retiré de la famille.`, components: [] });
                     }
-
-                    let s2Id = authorId;
-                    if (isAdminCmd) {
-                        const u2Select = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('u2').setPlaceholder('Membre 2...'));
-                        await ui.update({ content: `Lien pour ${s1User}. Qui est la 2ème personne ?`, components: [u2Select] });
-                        const ui2 = await msg.awaitMessageComponent({ componentType: ComponentType.UserSelect, time: 30000 });
-                        s2Id = ui2.values[0];
-                        await ui2.update({ content: `Lien entre <@${s1Id}> et <@${s2Id}>. Quel rôle ?`, components: [] });
-                    }
-
-                    const roleMenu = new ActionRowBuilder().addComponents(
-                        new StringSelectMenuBuilder().setCustomId('r').setPlaceholder('Rôle...')
+                    const rMenu = new ActionRowBuilder().addComponents(
+                        new StringSelectMenuBuilder().setCustomId('role').setPlaceholder('Rôle...')
                             .addOptions(ROLES_LIST.map(r => ({ label: r, value: r })))
                     );
-                    // Use ui.editReply if it's an interaction, or msg.edit if it's the original message
-                    await ui.editReply({ content: `Sélectionnez le rôle :`, components: [roleMenu] });
-
-                    const rColl = msg.createMessageComponentCollector({ componentType: ComponentType.StringSelect, time: 60000 });
+                    await ui.update({ content: `Attribuer un rôle à <@${targetId}> :`, components: [rMenu] });
+                    const rColl = msg.createMessageComponentCollector({ componentType: ComponentType.StringSelect, time: 30000 });
                     rColl.on('collect', async (ri) => {
-                        const role = ri.values[0];
-                        if (isAdminCmd) {
-                            await executeLinkChange(s2Id, s1Id, role, action);
-                            return ri.update({ content: `✅ Lien **${role}** établi entre <@${s2Id}> et <@${s1Id}>.`, components: [] });
-                        } else {
-                            if (action === 'add') await sendInvitation(ri, message.author, s1User, role, action);
-                            else await startFamilyVote(ri, message.author, s1User, role, action);
+                        await executeLinkChange(family.head, targetId, ri.values[0], 'add');
+                        await db.updateUser(targetId, { familyName: family._id });
+                        if (!family.members.includes(targetId)) {
+                            family.members.push(targetId);
+                            await db.updateFamily(family._id, { members: family.members });
                         }
+                        await ri.update({ content: `✅ Rôle ${ri.values[0]} mis à jour pour <@${targetId}>.`, components: [] });
                     });
                 });
             });
+            coll.on('end', () => msg.edit({ components: [] }).catch(() => {}));
             return;
         }
 
-        case 'divorce': {
-            if (!authorData.spouse) return message.reply('Tu n\'es pas marié(e).');
-            const spouseId = authorData.spouse;
-            await executeLinkChange(authorId, spouseId, null, 'remove');
-            return message.reply(`💔 Tu as divorcé de ${formatMention(spouseId)}.`);
-        }
+        case 'family': {
+            if (args.length > 0) {
+                await message.channel.sendTyping();
+                const inputName = args.join(' ').toLowerCase();
+                const targetUser = message.mentions.users.first();
+                let targetId = targetUser ? targetUser.id : null;
 
-        case 'family-create': {
-            const familyName = args.join(' ').toLowerCase();
-            if (!familyName) {
-                return message.reply('Veuillez spécifier un nom pour votre famille. Exemple: `!family-create Les Dupont`');
-            }
-            if (familyName.length < 3 || familyName.length > 20) {
-                return message.reply('Le nom de famille doit contenir entre 3 et 20 caractères.');
-            }
-            if (await db.getFamily(familyName)) {
-                return message.reply(`❌ La famille "${familyName}" existe déjà.`);
-            }
-            if (authorData.familyName) {
-                return message.reply(`❌ Vous faites déjà partie de la famille "${authorData.familyName}". Quittez-la d'abord pour en créer une nouvelle.`);
+                const family = await db.getFamily(inputName);
+                if (!targetId && family) targetId = family.head;
+                else if (!targetId) return message.reply("❌ Famille introuvable.");
+
+                const buffer = await generateFamilyImage(client, targetId);
+                const attachment = new AttachmentBuilder(buffer, { name: 'family.png' });
+                const ext = await getExtendedFamily(targetId);
+                const embed = new EmbedBuilder().setTitle(`Arbre de ${inputName.toUpperCase()}`).setImage('attachment://family.png')
+                    .addFields({ name: 'Fratrie', value: Array.from(ext.siblings).map(formatMention).join(', ') || 'Aucun', inline: true });
+                return message.reply({ embeds: [embed], files: [attachment] });
             }
 
-            await db.createFamily(familyName, authorId);
-            await db.updateUser(authorId, { familyName: familyName });
-            return message.reply(`🎉 Félicitations ! La famille "${familyName.charAt(0).toUpperCase() + familyName.slice(1)}" a été créée et vous en êtes le chef !`);
-        }
+            const embed = new EmbedBuilder().setTitle("🏠 Gestion de Famille").setColor("#5865F2");
+            const rows = [];
 
-        case 'family-delete': {
-            const familyName = args.join(' ').toLowerCase();
-            if (!familyName) {
-                return message.reply('Veuillez spécifier le nom de la famille à supprimer. Exemple: `!family-delete Les Dupont`');
+            if (!authorData.familyName) {
+                embed.setDescription("Vous ne possédez pas de famille. Souhaitez-vous fonder votre propre lignée ?");
+                rows.push(new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId('create_fam').setLabel('Créer une famille').setStyle(ButtonStyle.Success),
+                    new ButtonBuilder().setCustomId('cancel').setLabel('Annuler').setStyle(ButtonStyle.Secondary)
+                ));
+            } else {
+                const family = await db.getFamily(authorData.familyName);
+                const isHead = family.head === authorId;
+                embed.setDescription(`Dynastie : **${authorData.familyName.toUpperCase()}**\nRang : ${isHead ? "Chef" : "Membre"}`);
+                
+                const menu = new StringSelectMenuBuilder().setCustomId('fam_action').setPlaceholder('Gérer...')
+                    .addOptions([
+                        { label: 'Ajouter un membre', value: 'add' },
+                        { label: 'Modifier un rôle', value: 'modify' },
+                        { label: 'Enlever un membre', value: 'remove' },
+                        { label: 'Quitter la famille', value: 'leave' }
+                    ]);
+                if (isHead) menu.addOptions({ label: 'Dissoudre la famille', value: 'delete' });
+                menu.addOptions({ label: 'Annuler', value: 'cancel' });
+                rows.push(new ActionRowBuilder().addComponents(menu));
             }
-            const family = await db.getFamily(familyName);
-            if (!family) {
-                return message.reply(`❌ La famille "${familyName}" n'existe pas.`);
-            }
 
-            const isHead = family.head === authorId;
-            const isAdmin = message.member.permissions.has(PermissionFlagsBits.Administrator);
-
-            if (!isHead && !isAdmin) {
-                return message.reply('❌ Seul le chef de famille ou un administrateur peut supprimer une famille.');
-            }
-
-            const confirmEmbed = new EmbedBuilder()
-                .setTitle('⚠️ Confirmation de Suppression de Famille')
-                .setColor('#e74c3c')
-                .setDescription(`Êtes-vous sûr de vouloir supprimer la famille **${familyName.charAt(0).toUpperCase() + familyName.slice(1)}** ?\n\n**ATTENTION :** Cette action est irréversible et supprimera tous les liens familiaux pour ses membres.`);
-
-            const confirmRow = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('delete_family_yes').setLabel('Oui, supprimer').setStyle(ButtonStyle.Danger),
-                new ButtonBuilder().setCustomId('delete_family_no').setLabel('Non, annuler').setStyle(ButtonStyle.Secondary)
-            );
-
-            const confirmationMsg = await message.reply({ embeds: [confirmEmbed], components: [confirmRow] });
-
-            const collector = confirmationMsg.createMessageComponentCollector({ componentType: ComponentType.Button, time: 60000 });
+            const msg = await message.reply({ embeds: [embed], components: rows });
+            const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
 
             collector.on('collect', async (i) => {
-                if (i.user.id !== authorId) {
-                    return i.reply({ content: "Seul l'initiateur de la commande peut confirmer.", ephemeral: true });
+                if (i.customId === 'cancel' || i.values?.[0] === 'cancel') return collector.stop();
+                if (i.customId === 'create_fam') {
+                    const modal = new ModalBuilder().setCustomId('modal_create_fam').setTitle('Nouvelle Famille');
+                    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('fam_name').setLabel("Nom de famille").setStyle(TextInputStyle.Short).setRequired(true)));
+                    return i.showModal(modal);
                 }
-
-                if (i.customId === 'delete_family_yes') {
-                    const membersToClear = [...family.members];
-                    for (const memberId of membersToClear) {
-                        await clearUserFamilyLinks(memberId);
-                    }
-                    await db.deleteFamily(familyName);
-                    await i.update({
-                        content: `✅ La famille **${familyName.charAt(0).toUpperCase() + familyName.slice(1)}** a été supprimée. Tous les liens familiaux de ses membres ont été réinitialisés.`,
-                        embeds: [],
-                        components: []
-                    });
-                } else {
-                    await i.update({
-                        content: `Opération annulée. La famille **${familyName.charAt(0).toUpperCase() + familyName.slice(1)}** n'a pas été supprimée.`,
-                        embeds: [],
-                        components: []
-                    });
+                const action = i.values[0];
+                if (action === 'delete') {
+                    const confirm = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('confirm_del').setLabel('Confirmer').setStyle(ButtonStyle.Danger));
+                    return i.update({ content: "⚠️ Dissoudre la famille ?", components: [confirm] });
                 }
-                collector.stop();
+                if (action === 'leave') {
+                    await clearUserFamilyLinks(authorId);
+                    return i.update({ content: "👋 Famille quittée.", components: [], embeds: [] });
+                }
+                const uSelect = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('Choisir...'));
+                await i.update({ content: `Action : ${action}.`, components: [uSelect] });
+                const uColl = msg.createMessageComponentCollector({ componentType: ComponentType.UserSelect, time: 30000 });
+                uColl.on('collect', async (ui) => {
+                    const targetUser = await client.users.fetch(ui.values[0]);
+                    if (action === 'remove') return startFamilyVote(ui, message.author, targetUser, 'Aucun', 'remove');
+                    const rMenu = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('r').setPlaceholder('Rôle...').addOptions(ROLES_LIST.map(r => ({ label: r, value: r }))));
+                    await ui.update({ content: `Rôle pour <@${targetUser.id}> :`, components: [rMenu] });
+                    const rColl = msg.createMessageComponentCollector({ componentType: ComponentType.StringSelect, time: 30000 });
+                    rColl.on('collect', async (ri) => {
+                        if (action === 'add') await sendInvitation(ri, message.author, targetUser, ri.values[0], 'add');
+                        else await startFamilyVote(ri, message.author, targetUser, ri.values[0], 'modify');
+                    });
+                });
             });
-
-            collector.on('end', async (collected, reason) => {
-                if (reason === 'time') {
-                    await confirmationMsg.edit({
-                        content: 'Confirmation expirée. La suppression de la famille a été annulée.',
-                        embeds: [],
-                        components: []
-                    });
-                }
-            });
+            collector.on('end', () => msg.edit({ components: [] }).catch(() => {}));
             return;
         }
 
+        case 'familytop':
         case 'account': {
             await message.channel.sendTyping();
+            const showWealth = async (uId, uData) => {
+                const members = [uId];
+                if (uData.spouse) members.push(uData.spouse);
+                uData.children.forEach(id => members.push(id));
+                const results = await Promise.all(members.map(id => getUBUser(message.guild.id, id)));
+                const total = results.reduce((acc, res) => acc + (res ? res.cash : 0), 0);
+                return new EmbedBuilder().setTitle('🏦 Banque Familiale').setColor('#f1c40f').addFields({ name: 'Fortune Totale', value: `💰 **${total.toLocaleString()}** cr.`, inline: false });
+            };
+            const showTop = async () => {
+                const familyWealths = [];
+                const allUsers = await db.getAllUsers();
+                const processed = new Set();
+                for (const uId of Object.keys(allUsers)) {
+                    const uData = allUsers[uId];
+                    let cId = uData.spouse ? [uId, uData.spouse].sort()[0] : uId;
+                    if (processed.has(cId)) continue;
+                    processed.add(cId);
+                    const members = [uId];
+                    if (uData.spouse) members.push(uData.spouse);
+                    uData.children.forEach(id => members.push(id));
+                    const res = await Promise.all(members.map(id => getUBUser(message.guild.id, id)));
+                    familyWealths.push({ headId: uId, total: res.reduce((acc, r) => acc + (r ? r.cash : 0), 0) });
+                }
+                familyWealths.sort((a, b) => b.total - a.total);
+                const embed = new EmbedBuilder().setTitle('🏆 Top des Familles').setColor('#ffd700');
+                familyWealths.slice(0, 10).forEach((f, i) => embed.addFields({ name: `${i + 1}. ${formatMention(f.headId)}`, value: `💰 ${f.total.toLocaleString()} cr.`, inline: false }));
+                return embed;
+            };
 
-            if (!process.env.UNBELIEVABOAT_TOKEN) {
-                return message.reply("⚠️ Le token UnbelievaBoat n'est pas configuré dans le fichier .env.");
-            }
-
-            // Collecte des membres de la famille (Auteur, Époux, et Enfants) pour la réflexion bancaire
-            const members = [authorId];
-            if (authorData.spouse) members.push(authorData.spouse);
-            authorData.children.forEach(id => members.push(id));
-
-            const results = await Promise.all(members.map(id => getUBUser(message.guild.id, id)));
-            const total = results.reduce((acc, res) => acc + (res ? res.cash : 0), 0);
-
-            const embed = new EmbedBuilder()
-                .setTitle('🏦 Banque Familiale (Réflexion)')
-                .setColor('#f1c40f')
-                .setDescription(`Ce solde est le reflet de la richesse cumulée de votre famille (Époux & Enfants) sur UnbelievaBoat.`)
-                .addFields(
-                    { name: 'Richesse Totale de la Famille', value: `💰 **${total.toLocaleString()}** crédits`, inline: false }
-                )
-                .setFooter({ text: 'Les soldes sont synchronisés en temps réel avec UnbelievaBoat' });
-            
-            // Détails individuels
-            const authorCash = results[0] ? results[0].cash : 0;
-            embed.addFields({ name: 'Votre portefeuille', value: `${authorCash.toLocaleString()} 💰`, inline: true });
-
-            if (authorData.spouse) {
-                const spouseCash = results[1] ? results[1].cash : 0;
-                embed.addFields({ name: 'Portefeuille conjoint', value: `${spouseCash} crédits`, inline: true });
-            }
-
-            if (authorData.children.length > 0) {
-                const childrenCash = results.slice(authorData.spouse ? 2 : 1).reduce((acc, res) => acc + (res ? res.cash : 0), 0);
-                embed.addFields({ name: 'Enfants (cumulé)', value: `${childrenCash} crédits`, inline: true });
-            }
-
-            await message.reply({ embeds: [embed] });
-            return;
-        }
-
-        case 'familytop': {
-            await message.channel.sendTyping();
-            const familyWealths = [];
-            const processedFamilyUnits = new Set();
-            const allUsers = await db.getAllUsers(); // Fetch all users once
-
-            for (const userId of Object.keys(allUsers)) {
-                const userData = allUsers[userId]; // Use pre-fetched user data
-                let canonicalId = userData.spouse ? [userId, userData.spouse].sort()[0] : userId;
-                if (processedFamilyUnits.has(canonicalId)) continue;
-                processedFamilyUnits.add(canonicalId);
-
-                const membersToFetch = new Set([userId]);
-                if (userData.spouse) membersToFetch.add(userData.spouse);
-                userData.children.forEach(childId => membersToFetch.add(childId));
-
-                const results = await Promise.all(Array.from(membersToFetch).map(id => getUBUser(message.guild.id, id)));
-                const totalFamilyCash = results.reduce((acc, res) => acc + (res ? res.cash : 0), 0);
-                familyWealths.push({ headId: userId, totalWealth: totalFamilyCash });
-            }
-
-            familyWealths.sort((a, b) => b.totalWealth - a.totalWealth);
-            const topEmbed = new EmbedBuilder()
-                .setTitle('🏆 Top des Familles les plus Riches')
-                .setColor('#ffd700')
-                .setDescription('Classement des familles par richesse cumulée (UnbelievaBoat).')
-                .setFooter({ text: 'Richesse synchronisée' });
-
-            familyWealths.slice(0, 10).forEach((family, index) => {
-                topEmbed.addFields({ name: `${index + 1}. ${formatMention(family.headId)}`, value: `💰 ${family.totalWealth.toLocaleString()} crédits`, inline: false });
+            const initialEmbed = (command === 'familytop') ? await showTop() : await showWealth(authorId, authorData);
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('v_wealth').setLabel('Ma Fortune').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('v_top').setLabel('🏆 Classement').setStyle(ButtonStyle.Primary)
+            );
+            const msg = await message.reply({ embeds: [initialEmbed], components: [row] });
+            const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
+            coll.on('collect', async (i) => {
+                await i.deferUpdate();
+                const newEmbed = (i.customId === 'v_top') ? await showTop() : await showWealth(authorId, authorData);
+                await i.editReply({ embeds: [newEmbed] });
             });
-            return message.reply({ embeds: [topEmbed] });
+            coll.on('end', () => msg.edit({ components: [] }).catch(() => {}));
+            return;
         }
 
         case 'help': {
@@ -794,14 +718,13 @@ client.on('messageCreate', async (message) => {
                 .setColor('#5865F2')
                 .setTitle('📚 Guide Complet de la Dynastie')
                 .setThumbnail(client.user.displayAvatarURL())
-                .setDescription(`Gérez vos lignées, votre réputation et votre fortune !\nLe préfixe actuel est : \`${PREFIX}\` (Les arguments entre \`< >\` sont obligatoires, \`[ ]\` sont optionnels).`)
+                .setDescription(`Gérez vos lignées et votre fortune via nos dashboards interactifs !\nPréfixe : \`${PREFIX}\``)
                 .addFields(
-                    { name: '🏠 Dynastie & Arbre', value: `\`${PREFIX}family\` : Ouvre le panneau interactif (Ajouter/Modifier/Exclure).\n\`${PREFIX}family <Nom_ou_@User>\` : Affiche l'image de l'arbre généalogique.\n\`${PREFIX}family-create <Nom>\` : Fonde une nouvelle lignée dont vous êtes le chef.\n\`${PREFIX}family-delete <Nom>\` : Dissout définitivement votre famille (Chef uniquement).` },
-                    { name: 'ℹ️ Profil & Personnalisation', value: `\`${PREFIX}info [@User]\` : Fiche détaillée (Genre, Bio).\n\`${PREFIX}modif-info genre <masculin/féminin/autre>\` : Définit votre genre.\n\`${PREFIX}modif-info nom <Nouveau_Nom>\` : Change le nom de votre branche (Parent/Chef).\n\`${PREFIX}modif-info nom-conjoint\` : Adopte le nom de votre mari/femme.` },
-                    { name: '💰 Économie & Fortune', value: `\`${PREFIX}account\` : Solde cumulé du foyer (Conjoint & Enfants) via UnbelievaBoat.\n\`${PREFIX}familytop\` : Classement des familles les plus riches du serveur.` },
-                    { name: '🤝 Social & Rupture', value: `\`${PREFIX}divorce\` : Met fin à votre mariage actuel.\n\`${PREFIX}hug\`, \`${PREFIX}kiss\`, \`${PREFIX}pat\`, \`${PREFIX}slap\`, \`${PREFIX}poke\` : Interactions animées avec un membre ciblé.` }
-                )
-                .setFooter({ text: 'Note : Les modifications de liens ou exclusions nécessitent un vote communautaire.' });
+                    { name: '🏠 Famille', value: `\`${PREFIX}family\` : Dashboard personnel.\n\`${PREFIX}family <Nom>\` : Voir l'arbre.` },
+                    { name: 'ℹ️ Profil', value: `\`${PREFIX}info [@User]\` : Fiche d'identité et personnalisation.` },
+                    { name: '💰 Fortune', value: `\`${PREFIX}account\` : Richesse du foyer et classement.` },
+                    { name: '🛡️ Admin', value: `\`${PREFIX}adminfamily <Nom>\` : Gestion de dynastie.` }
+                );
             return message.reply({ embeds: [h] });
         }
 
@@ -813,96 +736,71 @@ client.on('messageCreate', async (message) => {
 
         case 'info': {
             const targetUser = target || message.author;
-            const tData = await db.getOrCreateUser(targetUser.id);
-            const ext = await getExtendedFamily(targetUser.id);
-            
-            const family = tData.familyName ? await db.getFamily(tData.familyName) : null;
-            const isHead = family && family.head === targetUser.id;
-            const familyRole = isHead ? "Chef de Famille" : (tData.familyName ? "Membre" : "Sans Famille");
+            const userData = await db.getOrCreateUser(targetUser.id);
+            const family = userData.familyName ? await db.getFamily(userData.familyName) : null;
 
-            const buildEmbed = (dataUser, userObj) => {
-                return new EmbedBuilder()
-                    .setTitle(`Profil Familial - ${userObj.username}`)
-                    .setColor('#3498db')
-                    .setThumbnail(userObj.displayAvatarURL())
-                    .addFields(
-                        { name: '🏷️ Nom de Famille', value: dataUser.familyName ? dataUser.familyName.toUpperCase() : 'Aucun', inline: true },
-                        { name: '🎭 Rang', value: familyRole, inline: true },
-                        { name: '👤 Genre', value: dataUser.gender || 'Non défini', inline: true },
-                        { name: '📝 Bio', value: dataUser.bio || 'Aucune bio définie.', inline: false },
-                        { name: '💍 Conjoint(e)', value: dataUser.spouse ? formatMention(dataUser.spouse) : 'Célibataire', inline: true },
-                        { name: '👨‍👩‍👦 Parents', value: dataUser.parents.map(formatMention).join(', ') || 'Inconnus', inline: true },
-                        { name: '👶 Enfants', value: dataUser.children.map(formatMention).join(', ') || 'Aucun', inline: true }
-                    );
-            };
+            const buildEmbed = () => new EmbedBuilder()
+                .setTitle(`Profil Familial - ${targetUser.username}`)
+                .setColor('#3498db')
+                .addFields(
+                    { name: '🏷️ Nom de Famille', value: userData.familyName ? userData.familyName.toUpperCase() : 'Aucun', inline: true },
+                    { name: '🎭 Rang', value: family?.head === targetUser.id ? "Chef" : (userData.familyName ? "Membre" : "Aucun"), inline: true },
+                    { name: '👤 Genre', value: userData.gender || 'Non défini', inline: true },
+                    { name: '📝 Bio', value: userData.bio || 'Aucune bio définie.', inline: false },
+                    { name: '💍 Conjoint', value: userData.spouse ? formatMention(userData.spouse) : 'Célibataire', inline: true },
+                    { name: '👨‍👩‍👦 Parents', value: userData.parents.map(formatMention).join(', ') || 'Inconnus', inline: true }
+                );
 
-            const mainEmbed = buildEmbed(tData, targetUser);
-            const rows = [];
-            
-            if (targetUser.id === authorId) {
-                rows.push(new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId('edit_profile').setLabel('⚙️ Personnaliser').setStyle(ButtonStyle.Secondary)
-                ));
-            }
-
-            const msg = await message.reply({ embeds: [mainEmbed], components: rows });
+            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('edit_p').setLabel('⚙️ Personnaliser').setStyle(ButtonStyle.Secondary));
+            const msg = await message.reply({ embeds: [buildEmbed()], components: targetUser.id === authorId ? [row] : [] });
             if (targetUser.id !== authorId) return;
 
-            const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
-            collector.on('collect', async (i) => {
-                if (i.customId === 'edit_profile') {
-                    const editRow = new ActionRowBuilder().addComponents(
-                        new StringSelectMenuBuilder().setCustomId('profile_field').setPlaceholder('Que voulez-vous modifier ?')
-                            .addOptions([
-                                { label: 'Ma Biographie', value: 'bio', description: 'Texte de présentation' },
-                                { label: 'Mon Genre', value: 'gender', description: 'Masculin / Féminin / Autre' },
-                                { label: 'Nom de Lignée', value: 'name', description: 'Renommer votre famille (Chef/Parent)' },
-                                { label: 'Prendre le nom du conjoint', value: 'spouse_name', description: 'Si vous êtes marié(e)' }
-                            ])
-                    );
-                    return i.update({ content: "Sélectionnez l'élément à modifier :", components: [editRow] });
+            const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
+            coll.on('collect', async (i) => {
+                if (i.customId === 'edit_p') {
+                    const menu = new StringSelectMenuBuilder().setCustomId('p_field').setPlaceholder('Modifier...')
+                        .addOptions([
+                            { label: 'Ma Bio', value: 'bio' },
+                            { label: 'Mon Genre', value: 'gender' },
+                            { label: 'Nom de Lignée', value: 'name' },
+                            { label: 'Nom du Conjoint', value: 'spouse' }
+                        ]);
+                    return i.update({ content: "Que modifier ?", components: [new ActionRowBuilder().addComponents(menu)] });
                 }
-                
                 if (i.values?.[0] === 'bio') {
-                    const modal = new ModalBuilder().setCustomId('modal_bio').setTitle('Modifier ma Bio');
-                    const input = new TextInputBuilder().setCustomId('bio_text').setLabel("Votre présentation").setStyle(TextInputStyle.Paragraph).setRequired(true);
-                    modal.addComponents(new ActionRowBuilder().addComponents(input));
+                    const modal = new ModalBuilder().setCustomId('modal_bio').setTitle('Ma Bio');
+                    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('bio_text').setLabel("Description").setStyle(TextInputStyle.Paragraph).setRequired(true)));
                     return i.showModal(modal);
                 }
-
                 if (i.values?.[0] === 'gender') {
-                    const gRow = new ActionRowBuilder().addComponents(
-                        new StringSelectMenuBuilder().setCustomId('select_gender').setPlaceholder('Choisir mon genre')
-                            .addOptions([
-                                { label: 'Masculin', value: 'masculin' },
-                                { label: 'Féminin', value: 'féminin' },
-                                { label: 'Autre', value: 'autre' }
-                            ])
-                    );
-                    return i.update({ content: "Quel est votre genre ?", components: [gRow] });
+                    const gRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('sel_gen').setPlaceholder('Genre...')
+                        .addOptions([{ label: 'Masculin', value: 'masculin' }, { label: 'Féminin', value: 'féminin' }, { label: 'Autre', value: 'autre' }]));
+                    return i.update({ content: "Votre genre ?", components: [gRow] });
                 }
-
-                if (i.customId === 'select_gender') {
+                if (i.customId === 'sel_gen') {
                     await db.updateUser(authorId, { gender: i.values[0] });
-                    return i.update({ content: `✅ Genre mis à jour sur **${i.values[0]}**.`, components: [] });
+                    return i.update({ content: "✅ Genre mis à jour.", components: [] });
                 }
-
-                if (i.values?.[0] === 'spouse_name') {
-                    if (!authorData.spouse) return i.reply({ content: "❌ Pas de conjoint.", ephemeral: true });
-                    const sData = await db.getOrCreateUser(authorData.spouse);
-                    if (!sData.familyName) return i.reply({ content: "❌ Pas de nom de famille.", ephemeral: true });
-                    await db.updateUser(authorId, { familyName: sData.familyName });
-                    return i.update({ content: "💍 Nom mis à jour !", components: [] });
-                }
-
                 if (i.values?.[0] === 'name') {
-                    const modal = new ModalBuilder().setCustomId('modal_rename_branch').setTitle('Renommer ma Branche');
-                    const input = new TextInputBuilder().setCustomId('new_name').setLabel("Nouveau nom").setStyle(TextInputStyle.Short).setRequired(true);
-                    modal.addComponents(new ActionRowBuilder().addComponents(input));
+                    const modal = new ModalBuilder().setCustomId('modal_rename_branch').setTitle('Nom de Branche');
+                    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('new_name').setLabel("Nouveau nom").setStyle(TextInputStyle.Short).setRequired(true)));
                     return i.showModal(modal);
+                }
+                if (i.values?.[0] === 'spouse') {
+                    if (!authorData.spouse) return i.reply({ content: "Pas de conjoint.", ephemeral: true });
+                    const sData = await db.getOrCreateUser(authorData.spouse);
+                    if (!sData.familyName) return i.reply({ content: "Pas de nom de famille.", ephemeral: true });
+                    await db.updateUser(authorId, { familyName: sData.familyName });
+                    return i.update({ content: "💍 Nom adopté !", components: [] });
                 }
             });
             return;
+        }
+
+        case 'divorce': {
+            if (!authorData.spouse) return message.reply('Tu n\'es pas marié(e).');
+            await executeLinkChange(authorId, authorData.spouse, null, 'remove');
+            return message.reply(`💔 Tu as divorcé de ${formatMention(authorData.spouse)}.`);
         }
 
         case 'hug': {
@@ -971,6 +869,45 @@ client.on('messageCreate', async (message) => {
             return message.reply({ embeds: [embed] });
         }
 
+    }
+});
+
+client.on('interactionCreate', async (interaction) => {
+    if (!interaction.isModalSubmit()) return;
+    
+    if (interaction.customId === 'modal_create_fam') {
+        const name = interaction.fields.getTextInputValue('fam_name').toLowerCase();
+        if (await db.getFamily(name)) return interaction.reply({ content: "❌ Nom déjà pris.", ephemeral: true });
+        await db.createFamily(name, interaction.user.id);
+        await db.updateUser(interaction.user.id, { familyName: name });
+        await interaction.reply({ content: `🎉 Famille **${name.toUpperCase()}** fondée !` });
+    }
+
+    if (interaction.customId === 'modal_bio') {
+        await db.updateUser(interaction.user.id, { bio: interaction.fields.getTextInputValue('bio_text') });
+        await interaction.reply({ content: "✅ Bio mise à jour !", ephemeral: true });
+    }
+
+    if (interaction.customId === 'modal_rename_branch') {
+        const newName = interaction.fields.getTextInputValue('new_name').toLowerCase().trim();
+        if (await db.getFamily(newName)) return interaction.reply({ content: "❌ Nom déjà pris.", ephemeral: true });
+        const uData = await db.getOrCreateUser(interaction.user.id);
+        const oldName = uData.familyName;
+        const family = oldName ? await db.getFamily(oldName) : null;
+
+        if (family?.head === interaction.user.id) {
+            await db.createFamily(newName, interaction.user.id);
+            await db.updateFamily(newName, { members: family.members });
+            for (const mId of family.members) await db.updateUser(mId, { familyName: newName });
+            await db.deleteFamily(oldName);
+            await interaction.reply({ content: `✅ Dynastie renommée : **${newName.toUpperCase()}** !` });
+        } else {
+            if (oldName && family) await db.updateFamily(oldName, { members: family.members.filter(id => id !== interaction.user.id) });
+            await db.createFamily(newName, interaction.user.id);
+            await db.updateUser(interaction.user.id, { familyName: newName });
+            await propagateNameChange(interaction.user.id, oldName, newName);
+            await interaction.reply({ content: `✅ Branche **${newName.toUpperCase()}** fondée !` });
+        }
     }
 });
 
