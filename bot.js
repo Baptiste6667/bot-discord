@@ -859,10 +859,116 @@ client.on('messageCreate', async (message) => {
                     { name: '🏠 Famille', value: `\`${PREFIX}family\` : Dashboard personnel.\n\`${PREFIX}family <Nom>\` : Voir l'arbre.` },
                     { name: 'ℹ️ Profil', value: `\`${PREFIX}info [@User]\` : Fiche d'identité et personnalisation.` },
                     { name: '💰 Fortune', value: `\`${PREFIX}account\` : Richesse du foyer et classement.` },
-                    { name: '💍 Social', value: `\`${PREFIX}divorce\`, \`${PREFIX}hug\`, \`${PREFIX}kiss\`, \`${PREFIX}pat\`, \`${PREFIX}slap\`, \`${PREFIX}poke\`` },
-                    { name: '🛡️ Admin', value: `\`${PREFIX}adminfamily <Nom>\` : Gestion de dynastie.` }
+                    { name: '💍 Social', value: `\`${PREFIX}marry <@User>\` : Demander quelqu'un en mariage.\n\`${PREFIX}divorce\`, \`${PREFIX}hug\`, \`${PREFIX}kiss\`, \`${PREFIX}pat\`, \`${PREFIX}slap\`, \`${PREFIX}poke\`` },
+                    { name: '�️ Admin', value: `\`${PREFIX}adminfamily <Nom>\` : Gestion de dynastie.` }
                 );
             return message.reply({ embeds: [h] });
+        }
+
+        case 'marry': {
+            if (!target) return message.reply('Qui veux-tu épouser ?');
+            if (target.id === authorId) return message.reply('Tu ne peux pas t\'épouser toi-même !');
+
+            const authorData = await db.getOrCreateUser(authorId);
+            const targetData = await db.getOrCreateUser(target.id);
+
+            if (authorData.spouse) return message.reply(`Tu es déjà marié(e) à ${formatMention(authorData.spouse)}.`);
+            if (targetData.spouse) return message.reply(`${formatMention(target.id)} est déjà marié(e).`);
+
+            const marryEmbed = new EmbedBuilder()
+                .setTitle("💖 Demande en Mariage")
+                .setColor("#FF69B4")
+                .setDescription(`${formatMention(target.id)}, ${formatMention(authorId)} te demande en mariage !`)
+                .setFooter({ text: "Tu as 60 secondes pour répondre." });
+
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('m_accept').setLabel('Accepter').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('m_decline').setLabel('Refuser').setStyle(ButtonStyle.Danger)
+            );
+
+            const msg = await message.reply({ content: `${formatMention(target.id)}`, embeds: [marryEmbed], components: [row] });
+
+            const collector = msg.createMessageComponentCollector({
+                filter: i => i.user.id === target.id,
+                componentType: ComponentType.Button,
+                time: 60000 // 60 seconds
+            });
+
+            collector.on('collect', async (i) => {
+                await i.deferUpdate(); // Acknowledge the interaction immediately
+
+                if (i.customId === 'm_accept') {
+                    const currentAuthorData = await db.getOrCreateUser(authorId); // Re-fetch to ensure latest state
+                    const currentTargetData = await db.getOrCreateUser(target.id); // Re-fetch
+
+                    if (currentAuthorData.spouse || currentTargetData.spouse) {
+                        await i.followUp({ content: "L'un de vous est déjà marié(e) ! La demande est annulée.", ephemeral: true });
+                        return msg.delete();
+                    }
+
+                    const authorHasFamily = !!currentAuthorData.familyName;
+                    const targetHasFamily = !!currentTargetData.familyName;
+
+                    let finalFamilyName = null;
+
+                    if (!authorHasFamily && !targetHasFamily) {
+                        // Scenario 1: Both have no family - create a new one
+                        const newFamilyName = `${author.username.substring(0, 5)}-${target.username.substring(0, 5)}-famille`.toLowerCase();
+                        const family = await db.createFamily(newFamilyName, authorId);
+                        family.members.push(target.id);
+                        await db.updateFamily(newFamilyName, { members: family.members });
+                        await db.updateUser(authorId, { familyName: newFamilyName });
+                        await db.updateUser(target.id, { familyName: newFamilyName });
+                        finalFamilyName = newFamilyName;
+                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant mariés et ont fondé la famille **${newFamilyName.toUpperCase()}** !`, ephemeral: false });
+                    } else if (authorHasFamily && !targetHasFamily) {
+                        // Scenario 2: Author has family, target does not - target joins author's family
+                        await db.updateUser(target.id, { familyName: currentAuthorData.familyName });
+                        const authorFamily = await db.getFamily(currentAuthorData.familyName);
+                        if (authorFamily && !authorFamily.members.includes(target.id)) {
+                            authorFamily.members.push(target.id);
+                            await db.updateFamily(authorFamily._id, { members: authorFamily.members });
+                        }
+                        finalFamilyName = currentAuthorData.familyName;
+                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant mariés ! ${formatMention(target.id)} a rejoint la famille **${currentAuthorData.familyName.toUpperCase()}** !`, ephemeral: false });
+                    } else if (!authorHasFamily && targetHasFamily) {
+                        // Scenario 3: Target has family, author does not - author joins target's family
+                        await db.updateUser(authorId, { familyName: currentTargetData.familyName });
+                        const targetFamily = await db.getFamily(currentTargetData.familyName);
+                        if (targetFamily && !targetFamily.members.includes(authorId)) {
+                            targetFamily.members.push(authorId);
+                            await db.updateFamily(targetFamily._id, { members: targetFamily.members });
+                        }
+                        finalFamilyName = currentTargetData.familyName;
+                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant mariés ! ${formatMention(authorId)} a rejoint la famille **${currentTargetData.familyName.toUpperCase()}** !`, ephemeral: false });
+                    } else if (authorHasFamily && targetHasFamily && currentAuthorData.familyName !== currentTargetData.familyName) {
+                        // Scenario 4: Both have different families - merge families
+                        await mergeFamilies(currentAuthorData.familyName, currentTargetData.familyName, authorId, target.id, 'conjoint');
+                        finalFamilyName = currentAuthorData.familyName; // The invited family merges into the inviter's family
+                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant mariés et leurs familles ont fusionné en **${finalFamilyName.toUpperCase()}** !`, ephemeral: false });
+                    } else if (authorHasFamily && targetHasFamily && currentAuthorData.familyName === currentTargetData.familyName) {
+                        // Scenario 5: Both are in the same family but not married to each other
+                        finalFamilyName = currentAuthorData.familyName;
+                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant mariés au sein de la famille **${finalFamilyName.toUpperCase()}** !`, ephemeral: false });
+                    }
+
+                    // Establish the spouse link
+                    await executeLinkChange(authorId, target.id, 'conjoint', 'add');
+                    await msg.delete(); // Delete the proposal message
+                } else if (i.customId === 'm_decline') {
+                    await i.followUp({ content: `😔 ${formatMention(target.id)} a refusé la demande en mariage de ${formatMention(authorId)}.`, ephemeral: false });
+                    await msg.delete(); // Delete the proposal message
+                }
+                collector.stop();
+            });
+
+            collector.on('end', async (collected, reason) => {
+                if (reason === 'time') {
+                    await msg.delete().catch(() => {}); // Delete if timed out
+                    await message.channel.send(`⌛ La demande en mariage de ${formatMention(authorId)} à ${formatMention(target.id)} a expiré.`);
+                }
+            });
+            return;
         }
 
         case 'stop': {
