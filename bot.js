@@ -86,8 +86,7 @@ async function generateFamilyImage(client, userId) {
     ctx.font = 'bold 14px sans-serif';
 
     const drawNode = async (id, x, y, color = '#7289da') => {
-        let user;
-        try { user = await client.users.fetch(id); } catch (e) { }
+        const user = client.users.cache.get(id) || await client.users.fetch(id).catch(() => null);
         const name = user ? user.username : id;
 
         ctx.fillStyle = color;
@@ -154,8 +153,9 @@ async function getExtendedFamily(userId) {
     const cousins = new Set();
 
     const parents = [user.father, user.mother].filter(p => p !== null);
-    for (const pId of parents) {
-        const parentData = await db.getOrCreateUser(pId);
+    const parentDataArray = await Promise.all(parents.map(pId => db.getOrCreateUser(pId)));
+    
+    for (const parentData of parentDataArray) {
         for (const cId of parentData.children) {
             if (cId !== userId) siblings.add(cId);
         }
@@ -163,13 +163,12 @@ async function getExtendedFamily(userId) {
         if (parentData.mother) grandparents.add(parentData.mother);
     }
 
-    for (const pId of parents) {
-        const parentData = await db.getOrCreateUser(pId);
+    for (const parentData of parentDataArray) {
         const gps = [parentData.father, parentData.mother].filter(gp => gp !== null);
-        for (const gpId of gps) {
-            const gpData = await db.getOrCreateUser(gpId);
+        const gpDataArray = await Promise.all(gps.map(gpId => db.getOrCreateUser(gpId)));
+        for (const gpData of gpDataArray) {
             for (const siblingOfParentId of gpData.children) {
-                if (siblingOfParentId !== pId) {
+                if (siblingOfParentId !== parentData._id) {
                     unclesAunts.add(siblingOfParentId);
                     // Cousins (children of uncles/aunts)
                     const uaData = await db.getOrCreateUser(siblingOfParentId);
@@ -683,15 +682,39 @@ client.on('messageCreate', async (message) => {
                 const targetUser = message.mentions.users.first();
                 let targetId = targetUser ? targetUser.id : null;
 
-                const family = await db.getFamily(inputName);
+                let family = await db.getFamily(inputName);
+                
+                if (targetId && !family) {
+                    const targetData = await db.getOrCreateUser(targetId);
+                    if (targetData.familyName) family = await db.getFamily(targetData.familyName);
+                }
+
                 if (!targetId && family) targetId = family.head;
                 else if (!targetId) return message.reply("❌ Famille introuvable.");
 
-                const buffer = await generateFamilyImage(client, targetId);
+                const [buffer, ext] = await Promise.all([
+                    generateFamilyImage(client, targetId),
+                    getExtendedFamily(targetId)
+                ]);
+
                 const attachment = new AttachmentBuilder(buffer, { name: 'family.png' });
-                const ext = await getExtendedFamily(targetId);
-                const embed = new EmbedBuilder().setTitle(`Arbre de ${inputName.toUpperCase()}`).setImage('attachment://family.png')
-                    .addFields({ name: 'Fratrie', value: Array.from(ext.siblings).map(formatMention).join(', ') || 'Aucun', inline: true });
+                const displayTitle = family ? family._id.toUpperCase() : "Inconnue";
+                
+                const embed = new EmbedBuilder()
+                    .setTitle(`Généalogie de la Famille ${displayTitle}`)
+                    .setColor('#5865F2')
+                    .setImage('attachment://family.png')
+                    .addFields(
+                        { name: '👑 Chef de Lignée', value: family ? formatMention(family.head) : 'Inconnu', inline: true },
+                        { name: '👥 Membres', value: family ? family.members.length.toString() : '1', inline: true },
+                        { name: '👫 Fratrie', value: Array.from(ext.siblings).map(formatMention).join(', ') || 'Aucun', inline: false },
+                        { name: '👴 Grands-parents', value: Array.from(ext.grandparents).map(formatMention).join(', ') || 'Aucun', inline: false },
+                        { name: '👨‍👩‍👧‍👦 Oncles & Tantes', value: Array.from(ext.unclesAunts).map(formatMention).join(', ') || 'Aucun', inline: false },
+                        { name: '🧒 Cousins', value: Array.from(ext.cousins).map(formatMention).join(', ') || 'Aucun', inline: false }
+                    )
+                    .setFooter({ text: `Consulté par ${message.author.username}` })
+                    .setTimestamp();
+
                 return message.reply({ embeds: [embed], files: [attachment] });
             }
 
