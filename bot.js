@@ -975,18 +975,26 @@ client.on('messageCreate', async (message) => {
     }
 });
 
-if (!process.env.DISCORD_TOKEN || process.env.DISCORD_TOKEN.trim() === "") {
-    console.error("❌ ERREUR : Le DISCORD_TOKEN est manquant ou vide dans le fichier .env.");
-    console.error("Vérifiez que le fichier .env est au même endroit que bot.js.");
-    process.exit(1);
+async function start() {
+    // On attend la connexion à la base de données avant de lancer le client
+    await db.connectDB();
+
+    if (!process.env.DISCORD_TOKEN || process.env.DISCORD_TOKEN.trim() === "") {
+        console.error("❌ ERREUR : Le DISCORD_TOKEN est manquant ou vide dans le fichier .env.");
+        console.error("Vérifiez que le fichier .env est au même endroit que bot.js.");
+        process.exit(1);
+    }
+
+    try {
+        await client.login(process.env.DISCORD_TOKEN);
+    } catch (err) {
+        if (err.code === 'TokenInvalid') {
+            console.error("❌ ERREUR : Le token Discord est invalide ou a été réinitialisé.");
+            console.error("Allez sur https://discord.com/developers/applications pour générer un nouveau token.");
+        } else {
+            console.error("❌ Impossible de se connecter à Discord :", err);
+        }
+    }
 }
 
-client.login(process.env.DISCORD_TOKEN).catch(err => {
-    if (err.code === 'TokenInvalid') {
-        console.error("❌ ERREUR : Le token Discord est invalide ou a été réinitialisé.");
-        console.error("Allez sur https://discord.com/developers/applications pour générer un nouveau token.");
-    } else {
-        console.error("❌ Impossible de se connecter à Discord :");
-        console.error(err);
-    }
-});
+start();

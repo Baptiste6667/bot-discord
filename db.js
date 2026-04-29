@@ -96,10 +96,15 @@ async function clearUserFamilyLinksDB(userId) {
           await deleteFamily(family._id);
         } else {
           // Logique de délégation : on cherche les membres au niveau générationnel le plus haut
-          const potentialHeads = family.members.filter(async mId => {
+          // Correction du filtre asynchrone
+          const results = await Promise.all(family.members.map(async mId => {
             const mData = await getOrCreateUser(mId);
-            return !mData.parents.some(pId => family.members.includes(pId));
-          });
+            const hasParentInFamily = mData.parents.some(pId => family.members.includes(pId));
+            return { mId, isPotential: !hasParentInFamily };
+          }));
+          
+          const potentialHeads = results.filter(r => r.isPotential).map(r => r.mId);
+
           family.head = potentialHeads.length > 0 ? potentialHeads[Math.floor(Math.random() * potentialHeads.length)] : family.members[Math.floor(Math.random() * family.members.length)];
           await updateFamily(family._id, { head: family.head, members: family.members });
         }
