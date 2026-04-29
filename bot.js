@@ -70,7 +70,7 @@ async function updateUBBalance(guildId, userId, cashDelta) {
 }
 
 // --- Visual Tree Generator ---
-async function generateFamilyImage(client, data, userId) {
+async function generateFamilyImage(client, userId) {
     const canvas = createCanvas(800, 450); // Canvas size
     const ctx = canvas.getContext('2d');
     const userData = await db.getOrCreateUser(userId); // Fetch user data from DB
@@ -396,7 +396,7 @@ async function executeLinkChange(id1, id2, role, action) { // No longer needs `d
     await db.updateUser(id2, d2Update);
 }
 
-async function startFamilyVote(interaction, author, target, role, action) { // No longer needs `data`
+async function startFamilyVote(interaction, author, target, role, action) {
     const voteEmbed = new EmbedBuilder()
         .setTitle("🗳️ Vote de la Communauté")
         .setColor("#f1c40f")
@@ -427,11 +427,10 @@ async function startFamilyVote(interaction, author, target, role, action) { // N
     collector.on('end', async () => {
         if (votesYes.size > votesNo.size) {
             if (action === 'remove') {
-                executeLinkChange(data, author.id, target.id, role, 'remove');
-                saveData(data);
+                await executeLinkChange(author.id, target.id, role, 'remove');
                 await interaction.editReply({ content: `✅ **Vote validé !** Lien rompu avec ${target}.`, embeds: [], components: [] });
             } else {
-                await sendInvitation(interaction, author, target, role, action, data, true);
+                await sendInvitation(interaction, author, target, role, action, true);
             }
         } else {
             await interaction.editReply({ content: `❌ **Vote rejeté.** L'action a été annulée.`, embeds: [], components: [] });
@@ -439,9 +438,9 @@ async function startFamilyVote(interaction, author, target, role, action) { // N
     });
 }
 
-async function sendInvitation(interaction, author, target, role, action, data, fromVote = false) {
-    const authorData = ensureUser(data, author.id);
-    const targetData = ensureUser(data, target.id);
+async function sendInvitation(interaction, author, target, role, action, fromVote = false) {
+    const authorData = await db.getOrCreateUser(author.id);
+    const targetData = await db.getOrCreateUser(target.id);
 
     let inviteEmbed = new EmbedBuilder()
         .setTitle("📩 Invitation Familiale")
@@ -474,21 +473,21 @@ async function sendInvitation(interaction, author, target, role, action, data, f
 
         if (i.customId === 'i_ok') {
             if (targetData.familyName && authorData.familyName && targetData.familyName !== authorData.familyName) {
-                clearUserFamilyLinks(data, target.id);
+                await clearUserFamilyLinks(target.id);
             }
-            executeLinkChange(data, author.id, target.id, role, action);
+            await executeLinkChange(author.id, target.id, role, action);
             if (authorData.familyName) {
-                targetData.familyName = authorData.familyName;
-                if (!data.families[authorData.familyName].members.includes(target.id)) {
-                    data.families[authorData.familyName].members.push(target.id);
+                const family = await db.getFamily(authorData.familyName);
+                if (family && !family.members.includes(target.id)) {
+                    family.members.push(target.id);
+                    await db.updateFamily(authorData.familyName, { members: family.members });
                 }
+                await db.updateUser(target.id, { familyName: authorData.familyName });
             }
-            saveData(data);
             await i.update({ content: `🎊 Félicitations ! ${target} est maintenant le/la **${role}** de ${author} !`, embeds: [], components: [] });
         } else if (i.customId === 'i_merge') {
-            mergeFamilies(data, authorData.familyName, targetData.familyName, author.id, target.id, role);
-            executeLinkChange(data, author.id, target.id, role, action);
-            saveData(data);
+            await mergeFamilies(authorData.familyName, targetData.familyName, author.id, target.id, role);
+            await executeLinkChange(author.id, target.id, role, action);
             await i.update({ content: `🤝 Les familles ont fusionné ! ${target} est maintenant le/la **${role}** de ${author} !`, embeds: [], components: [] });
         } else {
             await i.update({ content: `😔 ${target} a refusé.`, embeds: [], components: [] });
@@ -507,9 +506,8 @@ client.on('messageCreate', async (message) => {
 
     const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
     const command = args.shift().toLowerCase();
-    const data = loadData();
     const authorId = message.author.id;
-    const authorData = ensureUser(data, authorId);
+    const authorData = await db.getOrCreateUser(authorId);
 
     const target = message.mentions.users.first();
     let response = null;
@@ -528,17 +526,18 @@ client.on('messageCreate', async (message) => {
                 let title = `Arbre de ${target ? target.username : inputName}`;
 
                 // Si ce n'est pas une mention, on cherche par nom de famille
-                if (!targetId && data.families[inputName]) {
-                    targetId = data.families[inputName].head;
+                const family = await db.getFamily(inputName);
+                if (!targetId && family) {
+                    targetId = family.head;
                     title = `Arbre de la famille ${inputName.toUpperCase()}`;
                 } else if (!targetId) {
                     return message.reply(`❌ La famille ou l'utilisateur "${inputName}" est introuvable.`);
                 }
 
                 try {
-                    const buffer = await generateFamilyImage(client, data, targetId);
+                    const buffer = await generateFamilyImage(client, targetId);
                     const attachment = new AttachmentBuilder(buffer, { name: 'family-tree.png' });
-                    const ext = getExtendedFamily(data, targetId);
+                    const ext = await getExtendedFamily(targetId);
                     const embed = new EmbedBuilder()
                         .setTitle(title)
                         .setImage('attachment://family-tree.png')
@@ -579,8 +578,8 @@ client.on('messageCreate', async (message) => {
                     const s1Id = ui.values[0];
                     const s1User = await client.users.fetch(s1Id);
                     if (action === 'clear') {
-                        data.users[s1Id] = { spouse: null, children: [], parents: [], customLinks: {} };
-                        saveData(data); return ui.update({ content: `✅ Arbre de ${s1User} effacé.`, components: [] });
+                        await db.updateUser(s1Id, { spouse: null, children: [], parents: [], customLinks: {}, familyName: null, bio: "", gender: null });
+                        return ui.update({ content: `✅ Arbre de ${s1User} effacé.`, components: [] });
                     }
 
                     let s2Id = authorId;
@@ -603,12 +602,11 @@ client.on('messageCreate', async (message) => {
                     rColl.on('collect', async (ri) => {
                         const role = ri.values[0];
                         if (isAdminCmd) {
-                            executeLinkChange(data, s2Id, s1Id, role, action);
-                            saveData(data);
+                            await executeLinkChange(s2Id, s1Id, role, action);
                             return ri.update({ content: `✅ Lien **${role}** établi entre <@${s2Id}> et <@${s1Id}>.`, components: [] });
                         } else {
-                            if (action === 'add') await sendInvitation(ri, message.author, s1User, role, action, data);
-                            else await startFamilyVote(ri, message.author, s1User, role, action, data);
+                            if (action === 'add') await sendInvitation(ri, message.author, s1User, role, action);
+                            else await startFamilyVote(ri, message.author, s1User, role, action);
                         }
                     });
                 });
@@ -619,8 +617,7 @@ client.on('messageCreate', async (message) => {
         case 'divorce': {
             if (!authorData.spouse) return message.reply('Tu n\'es pas marié(e).');
             const spouseId = authorData.spouse;
-            executeLinkChange(data, authorId, spouseId, null, 'remove');
-            saveData(data);
+            await executeLinkChange(authorId, spouseId, null, 'remove');
             return message.reply(`💔 Tu as divorcé de ${formatMention(spouseId)}.`);
         }
 
@@ -632,19 +629,15 @@ client.on('messageCreate', async (message) => {
             if (familyName.length < 3 || familyName.length > 20) {
                 return message.reply('Le nom de famille doit contenir entre 3 et 20 caractères.');
             }
-            if (data.families[familyName]) {
+            if (await db.getFamily(familyName)) {
                 return message.reply(`❌ La famille "${familyName}" existe déjà.`);
             }
             if (authorData.familyName) {
                 return message.reply(`❌ Vous faites déjà partie de la famille "${authorData.familyName}". Quittez-la d'abord pour en créer une nouvelle.`);
             }
 
-            data.families[familyName] = {
-                head: authorId,
-                members: [authorId]
-            };
-            authorData.familyName = familyName;
-            saveData(data);
+            await db.createFamily(familyName, authorId);
+            await db.updateUser(authorId, { familyName: familyName });
             return message.reply(`🎉 Félicitations ! La famille "${familyName.charAt(0).toUpperCase() + familyName.slice(1)}" a été créée et vous en êtes le chef !`);
         }
 
@@ -653,11 +646,12 @@ client.on('messageCreate', async (message) => {
             if (!familyName) {
                 return message.reply('Veuillez spécifier le nom de la famille à supprimer. Exemple: `!family-delete Les Dupont`');
             }
-            if (!data.families[familyName]) {
+            const family = await db.getFamily(familyName);
+            if (!family) {
                 return message.reply(`❌ La famille "${familyName}" n'existe pas.`);
             }
 
-            const isHead = data.families[familyName].head === authorId;
+            const isHead = family.head === authorId;
             const isAdmin = message.member.permissions.has(PermissionFlagsBits.Administrator);
 
             if (!isHead && !isAdmin) {
@@ -684,12 +678,11 @@ client.on('messageCreate', async (message) => {
                 }
 
                 if (i.customId === 'delete_family_yes') {
-                    const membersToClear = [...data.families[familyName].members]; // Copy array before modification
+                    const membersToClear = [...family.members];
                     for (const memberId of membersToClear) {
-                        clearUserFamilyLinks(data, memberId);
+                        await clearUserFamilyLinks(memberId);
                     }
-                    delete data.families[familyName];
-                    saveData(data);
+                    await db.deleteFamily(familyName);
                     await i.update({
                         content: `✅ La famille **${familyName.charAt(0).toUpperCase() + familyName.slice(1)}** a été supprimée. Tous les liens familiaux de ses membres ont été réinitialisés.`,
                         embeds: [],
@@ -817,10 +810,11 @@ client.on('messageCreate', async (message) => {
 
         case 'info': {
             const targetUser = target || message.author;
-            const tData = ensureUser(data, targetUser.id);
-            const ext = getExtendedFamily(data, targetUser.id);
+            const tData = await db.getOrCreateUser(targetUser.id);
+            const ext = await getExtendedFamily(targetUser.id);
             
-            const isHead = tData.familyName && data.families[tData.familyName]?.head === targetUser.id;
+            const family = tData.familyName ? await db.getFamily(tData.familyName) : null;
+            const isHead = family && family.head === targetUser.id;
             const familyRole = isHead ? "Chef de Famille" : (tData.familyName ? "Membre" : "Sans Famille");
 
             const embed = new EmbedBuilder()
@@ -845,29 +839,40 @@ client.on('messageCreate', async (message) => {
 
             if (subCommand === 'bio') {
                 if (!value) return message.reply(`Usage: \`${PREFIX}modif-info bio <votre texte>\``);
-                authorData.bio = value;
-                saveData(data);
+                await db.updateUser(authorId, { bio: value });
                 return message.reply("✅ Votre bio a été mise à jour !");
             } else if (subCommand === 'genre') {
                 const validGenders = ['masculin', 'féminin', 'autre'];
                 if (!validGenders.includes(value.toLowerCase())) return message.reply("Genre invalide (choix : masculin, féminin, autre).");
-                authorData.gender = value.toLowerCase();
-                saveData(data);
-                return message.reply(`✅ Genre défini sur **${authorData.gender}**.`);
+                await db.updateUser(authorId, { gender: value.toLowerCase() });
+                return message.reply(`✅ Genre défini sur **${value.toLowerCase()}**.`);
             } else if (subCommand === 'nom-conjoint') {
                 if (!authorData.spouse) return message.reply("❌ Vous devez être marié(e) pour prendre le nom de votre conjoint.");
-                const spouseData = data.users[authorData.spouse];
+                const spouseData = await db.getOrCreateUser(authorData.spouse);
                 if (!spouseData.familyName) return message.reply("❌ Votre conjoint n'a pas de nom de famille défini.");
                 
-                authorData.familyName = spouseData.familyName;
-                if (!data.families[authorData.familyName].members.includes(authorId)) {
-                    data.families[authorData.familyName].members.push(authorId);
+                const oldFamilyName = authorData.familyName;
+                if (oldFamilyName) {
+                    const oldFamily = await db.getFamily(oldFamilyName);
+                    if (oldFamily) {
+                        const newMembers = oldFamily.members.filter(id => id !== authorId);
+                        await db.updateFamily(oldFamilyName, { members: newMembers });
+                    }
                 }
-                saveData(data);
+
+                const newFamilyName = spouseData.familyName;
+                const newFamily = await db.getFamily(newFamilyName);
+                if (newFamily && !newFamily.members.includes(authorId)) {
+                    newFamily.members.push(authorId);
+                    await db.updateFamily(newFamilyName, { members: newFamily.members });
+                }
+                await db.updateUser(authorId, { familyName: newFamilyName });
+
                 return message.reply(`💍 Vous portez désormais le nom de votre conjoint : **${authorData.familyName.toUpperCase()}**.`);
             } else if (subCommand === 'nom') {
                 const oldName = authorData.familyName;
-                const isHead = oldName && data.families[oldName]?.head === authorId;
+                const family = oldName ? await db.getFamily(oldName) : null;
+                const isHead = family && family.head === authorId;
                 const isParent = authorData.children.length > 0;
 
                 if (!isHead && !isParent) {
@@ -876,24 +881,25 @@ client.on('messageCreate', async (message) => {
 
                 const newName = value.toLowerCase().trim();
                 if (!newName) return message.reply(`Usage: \`${PREFIX}modif-info nom <nouveau nom>\``);
-                if (data.families[newName]) return message.reply("❌ Ce nom de famille est déjà utilisé.");
+                if (await db.getFamily(newName)) return message.reply("❌ Ce nom de famille est déjà utilisé.");
 
                 if (isHead) {
-                    // Renommer toute la dynastie enregistrée
-                    data.families[newName] = data.families[oldName];
-                    delete data.families[oldName];
-                    data.families[newName].members.forEach(mId => {
-                        if (data.users[mId]) data.users[mId].familyName = newName;
-                    });
+                    await db.createFamily(newName, authorId);
+                    await db.updateFamily(newName, { members: family.members });
+                    for (const mId of family.members) {
+                        await db.updateUser(mId, { familyName: newName });
+                    }
+                    await db.deleteFamily(oldName);
                 } else {
-                    // Changement de branche (Parent qui n'est pas chef)
-                    authorData.familyName = newName;
-                    data.families[newName] = { head: authorId, members: [authorId] };
-                    // Propagation logique aux enfants dépendants
-                    propagateNameChange(data, authorId, oldName, newName);
+                    if (oldName && family) {
+                        const newMembers = family.members.filter(id => id !== authorId);
+                        await db.updateFamily(oldName, { members: newMembers });
+                    }
+                    await db.createFamily(newName, authorId);
+                    await db.updateUser(authorId, { familyName: newName });
+                    await propagateNameChange(authorId, oldName, newName);
                 }
 
-                saveData(data);
                 return message.reply(`✅ Changement de nom effectué : **${newName.toUpperCase()}** (appliqué aux descendants dépendants).`);
             } else {
                 return message.reply(`Sous-commandes : \`bio\`, \`genre\`, \`nom\`, \`nom-conjoint\``);
@@ -902,7 +908,7 @@ client.on('messageCreate', async (message) => {
 
         case 'hug': {
             if (!target) return message.reply('Qui veux-tu câliner ?');
-            const rel = areRelated(data, authorId, target.id);
+            const rel = await areRelated(authorId, target.id);
             let desc = `${formatMention(authorId)} fait un gros câlin à ${formatMention(target.id)} !`;
             if (rel && rel !== 'soi-même') desc += ` ❤️ Les câlins entre **${rel}s** sont les meilleurs !`;
             if (rel === 'soi-même') desc = `Tu te fais un câlin à toi-même ? C'est mignon mais un peu solitaire !`;
