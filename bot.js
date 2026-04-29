@@ -17,7 +17,8 @@ const {
     UserSelectMenuBuilder,
     ModalBuilder,
     TextInputBuilder,
-    TextInputStyle
+    TextInputStyle,
+    MessageFlags
 } = require('discord.js');
 const { createCanvas, loadImage } = require('canvas');
 const axios = require('axios');
@@ -86,8 +87,9 @@ async function generateFamilyImage(client, userId) {
     ctx.font = 'bold 14px sans-serif';
 
     const drawNode = async (id, x, y, color = '#7289da') => {
-        const user = client.users.cache.get(id) || await client.users.fetch(id).catch(() => null);
-        const name = user ? user.username : id;
+        if (!id) return;
+        const user = client.users.cache.get(id) || (typeof id === 'string' ? await client.users.fetch(id).catch(() => null) : null);
+        const name = (user ? user.username : id)?.toString() || "Inconnu";
 
         ctx.fillStyle = color;
         ctx.beginPath();
@@ -516,7 +518,7 @@ async function sendInvitation(interaction, author, target, role, action, fromVot
     const collector = (msg || await interaction.fetchReply()).createMessageComponentCollector({ componentType: ComponentType.Button, time: 300000 });
     
     collector.on('collect', async (i) => {
-        if (i.user.id !== target.id) return i.reply({ content: "Ce n'est pas pour vous.", ephemeral: true });
+        if (i.user.id !== target.id) return i.reply({ content: "Ce n'est pas pour vous.", flags: MessageFlags.Ephemeral });
 
         if (i.customId === 'i_ok') {
             if (targetData.familyName && authorData.familyName && targetData.familyName !== authorData.familyName) {
@@ -627,11 +629,11 @@ client.on('messageCreate', async (message) => {
                     const targetData = await db.getOrCreateUser(targetId);
 
                     if (action === 'add' && targetData.familyName === family._id) {
-                        await ui.reply({ content: "❌ Cet utilisateur est déjà dans cette famille.", ephemeral: true });
+                        await ui.reply({ content: "❌ Cet utilisateur est déjà dans cette famille.", flags: MessageFlags.Ephemeral });
                         return msg.delete();
                     }
                     if ((action === 'remove' || action === 'modify') && targetData.familyName !== family._id) {
-                        await ui.reply({ content: "❌ Cet utilisateur n'est pas dans cette famille.", ephemeral: true });
+                        await ui.reply({ content: "❌ Cet utilisateur n'est pas dans cette famille.", flags: MessageFlags.Ephemeral });
                         return msg.delete();
                     }
 
@@ -794,11 +796,11 @@ client.on('messageCreate', async (message) => {
                     const targetUser = client.users.cache.get(targetId) || await client.users.fetch(targetId);
 
                     if (action === 'add' && targetData.familyName === authorData.familyName) {
-                        await ui.reply({ content: "❌ Cet utilisateur est déjà dans votre famille.", ephemeral: true });
+                        await ui.reply({ content: "❌ Cet utilisateur est déjà dans votre famille.", flags: MessageFlags.Ephemeral });
                         return msg.delete();
                     }
                     if ((action === 'remove' || action === 'modify') && targetData.familyName !== authorData.familyName) {
-                        await ui.reply({ content: "❌ Cet utilisateur n'est pas dans votre famille.", ephemeral: true });
+                        await ui.reply({ content: "❌ Cet utilisateur n'est pas dans votre famille.", flags: MessageFlags.Ephemeral });
                         return msg.delete();
                     }
 
@@ -922,11 +924,11 @@ client.on('messageCreate', async (message) => {
                 await i.deferUpdate(); // Acknowledge the interaction immediately
 
                 if (i.customId === 'm_accept') {
-                    const currentAuthorData = await db.getOrCreateUser(authorId); // Re-fetch to ensure latest state
-                    const currentTargetData = await db.getOrCreateUser(target.id); // Re-fetch
+                    const currentAuthorData = await db.getOrCreateUser(authorId);
+                    const currentTargetData = await db.getOrCreateUser(target.id);
 
                     if (currentAuthorData.spouse || currentTargetData.spouse) {
-                        await i.followUp({ content: "L'un de vous est déjà marié(e) ! La demande est annulée.", ephemeral: true });
+                        await i.followUp({ content: "L'un de vous est déjà marié(e) ! La demande est annulée.", flags: MessageFlags.Ephemeral });
                         return msg.delete();
                     }
 
@@ -1055,9 +1057,9 @@ client.on('messageCreate', async (message) => {
                     return i.showModal(modal);
                 }
                 if (i.values?.[0] === 'spouse') {
-                    if (!authorData.spouse) return i.reply({ content: "Pas de conjoint.", ephemeral: true });
+                    if (!authorData.spouse) return i.reply({ content: "Pas de conjoint.", flags: MessageFlags.Ephemeral });
                     const sData = await db.getOrCreateUser(authorData.spouse);
-                    if (!sData.familyName) return i.reply({ content: "Pas de nom de famille.", ephemeral: true });
+                    if (!sData.familyName) return i.reply({ content: "Pas de nom de famille.", flags: MessageFlags.Ephemeral });
                     await db.updateUser(authorId, { familyName: sData.familyName });
                     return i.update({ content: "💍 Nom adopté !", components: [] });
                 }
@@ -1145,7 +1147,7 @@ client.on('interactionCreate', async (interaction) => {
     
     if (interaction.customId === 'modal_create_fam') {
         const name = interaction.fields.getTextInputValue('fam_name').toLowerCase();
-        if (await db.getFamily(name)) return interaction.reply({ content: "❌ Nom déjà pris.", ephemeral: true });
+        if (await db.getFamily(name)) return interaction.reply({ content: "❌ Nom déjà pris.", flags: MessageFlags.Ephemeral });
         await db.createFamily(name, interaction.user.id);
         await db.updateUser(interaction.user.id, { familyName: name });
         await interaction.reply({ content: `🎉 Famille **${name.toUpperCase()}** fondée !` });
@@ -1153,12 +1155,12 @@ client.on('interactionCreate', async (interaction) => {
 
     if (interaction.customId === 'modal_bio') {
         await db.updateUser(interaction.user.id, { bio: interaction.fields.getTextInputValue('bio_text') });
-        await interaction.reply({ content: "✅ Bio mise à jour !", ephemeral: true });
+        await interaction.reply({ content: "✅ Bio mise à jour !", flags: MessageFlags.Ephemeral });
     }
 
     if (interaction.customId === 'modal_rename_branch') {
         const newName = interaction.fields.getTextInputValue('new_name').toLowerCase().trim();
-        if (await db.getFamily(newName)) return interaction.reply({ content: "❌ Nom déjà pris.", ephemeral: true });
+        if (await db.getFamily(newName)) return interaction.reply({ content: "❌ Nom déjà pris.", flags: MessageFlags.Ephemeral });
         const uData = await db.getOrCreateUser(interaction.user.id);
         const oldName = uData.familyName;
         const family = oldName ? await db.getFamily(oldName) : null;
