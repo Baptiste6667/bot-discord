@@ -14,7 +14,10 @@ const {
     ButtonStyle, 
     ComponentType, 
     StringSelectMenuBuilder, 
-    UserSelectMenuBuilder 
+    UserSelectMenuBuilder,
+    ModalBuilder,
+    TextInputBuilder,
+    TextInputStyle
 } = require('discord.js');
 const { createCanvas, loadImage } = require('canvas');
 const axios = require('axios');
@@ -817,93 +820,89 @@ client.on('messageCreate', async (message) => {
             const isHead = family && family.head === targetUser.id;
             const familyRole = isHead ? "Chef de Famille" : (tData.familyName ? "Membre" : "Sans Famille");
 
-            const embed = new EmbedBuilder()
-                .setTitle(`Profil Familial - ${targetUser.username}`)
-                .setColor('#3498db')
-                .setThumbnail(targetUser.displayAvatarURL())
-                .addFields(
-                    { name: '🏷️ Nom de Famille', value: tData.familyName ? tData.familyName.toUpperCase() : 'Aucun', inline: true },
-                    { name: '🎭 Rang', value: familyRole, inline: true },
-                    { name: '👤 Genre', value: tData.gender || 'Non défini', inline: true },
-                    { name: '📝 Bio', value: tData.bio || 'Aucune bio définie.', inline: false },
-                    { name: '💍 Conjoint(e)', value: tData.spouse ? formatMention(tData.spouse) : 'Célibataire', inline: true },
-                    { name: '👨‍👩‍👦 Parents', value: tData.parents.map(formatMention).join(', ') || 'Inconnus', inline: true },
-                    { name: '👶 Enfants', value: tData.children.map(formatMention).join(', ') || 'Aucun', inline: true }
-                );
-            return message.reply({ embeds: [embed] });
-        }
+            const buildEmbed = (dataUser, userObj) => {
+                return new EmbedBuilder()
+                    .setTitle(`Profil Familial - ${userObj.username}`)
+                    .setColor('#3498db')
+                    .setThumbnail(userObj.displayAvatarURL())
+                    .addFields(
+                        { name: '🏷️ Nom de Famille', value: dataUser.familyName ? dataUser.familyName.toUpperCase() : 'Aucun', inline: true },
+                        { name: '🎭 Rang', value: familyRole, inline: true },
+                        { name: '👤 Genre', value: dataUser.gender || 'Non défini', inline: true },
+                        { name: '📝 Bio', value: dataUser.bio || 'Aucune bio définie.', inline: false },
+                        { name: '💍 Conjoint(e)', value: dataUser.spouse ? formatMention(dataUser.spouse) : 'Célibataire', inline: true },
+                        { name: '👨‍👩‍👦 Parents', value: dataUser.parents.map(formatMention).join(', ') || 'Inconnus', inline: true },
+                        { name: '👶 Enfants', value: dataUser.children.map(formatMention).join(', ') || 'Aucun', inline: true }
+                    );
+            };
 
-        case 'modif-info': {
-            const subCommand = args[0]?.toLowerCase();
-            const value = args.slice(1).join(' ');
-
-            if (subCommand === 'bio') {
-                if (!value) return message.reply(`Usage: \`${PREFIX}modif-info bio <votre texte>\``);
-                await db.updateUser(authorId, { bio: value });
-                return message.reply("✅ Votre bio a été mise à jour !");
-            } else if (subCommand === 'genre') {
-                const validGenders = ['masculin', 'féminin', 'autre'];
-                if (!validGenders.includes(value.toLowerCase())) return message.reply("Genre invalide (choix : masculin, féminin, autre).");
-                await db.updateUser(authorId, { gender: value.toLowerCase() });
-                return message.reply(`✅ Genre défini sur **${value.toLowerCase()}**.`);
-            } else if (subCommand === 'nom-conjoint') {
-                if (!authorData.spouse) return message.reply("❌ Vous devez être marié(e) pour prendre le nom de votre conjoint.");
-                const spouseData = await db.getOrCreateUser(authorData.spouse);
-                if (!spouseData.familyName) return message.reply("❌ Votre conjoint n'a pas de nom de famille défini.");
-                
-                const oldFamilyName = authorData.familyName;
-                if (oldFamilyName) {
-                    const oldFamily = await db.getFamily(oldFamilyName);
-                    if (oldFamily) {
-                        const newMembers = oldFamily.members.filter(id => id !== authorId);
-                        await db.updateFamily(oldFamilyName, { members: newMembers });
-                    }
-                }
-
-                const newFamilyName = spouseData.familyName;
-                const newFamily = await db.getFamily(newFamilyName);
-                if (newFamily && !newFamily.members.includes(authorId)) {
-                    newFamily.members.push(authorId);
-                    await db.updateFamily(newFamilyName, { members: newFamily.members });
-                }
-                await db.updateUser(authorId, { familyName: newFamilyName });
-
-                return message.reply(`💍 Vous portez désormais le nom de votre conjoint : **${authorData.familyName.toUpperCase()}**.`);
-            } else if (subCommand === 'nom') {
-                const oldName = authorData.familyName;
-                const family = oldName ? await db.getFamily(oldName) : null;
-                const isHead = family && family.head === authorId;
-                const isParent = authorData.children.length > 0;
-
-                if (!isHead && !isParent) {
-                    return message.reply("❌ Seul le chef de famille ou un parent peut modifier le nom de la lignée.");
-                }
-
-                const newName = value.toLowerCase().trim();
-                if (!newName) return message.reply(`Usage: \`${PREFIX}modif-info nom <nouveau nom>\``);
-                if (await db.getFamily(newName)) return message.reply("❌ Ce nom de famille est déjà utilisé.");
-
-                if (isHead) {
-                    await db.createFamily(newName, authorId);
-                    await db.updateFamily(newName, { members: family.members });
-                    for (const mId of family.members) {
-                        await db.updateUser(mId, { familyName: newName });
-                    }
-                    await db.deleteFamily(oldName);
-                } else {
-                    if (oldName && family) {
-                        const newMembers = family.members.filter(id => id !== authorId);
-                        await db.updateFamily(oldName, { members: newMembers });
-                    }
-                    await db.createFamily(newName, authorId);
-                    await db.updateUser(authorId, { familyName: newName });
-                    await propagateNameChange(authorId, oldName, newName);
-                }
-
-                return message.reply(`✅ Changement de nom effectué : **${newName.toUpperCase()}** (appliqué aux descendants dépendants).`);
-            } else {
-                return message.reply(`Sous-commandes : \`bio\`, \`genre\`, \`nom\`, \`nom-conjoint\``);
+            const mainEmbed = buildEmbed(tData, targetUser);
+            const rows = [];
+            
+            if (targetUser.id === authorId) {
+                rows.push(new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId('edit_profile').setLabel('⚙️ Personnaliser').setStyle(ButtonStyle.Secondary)
+                ));
             }
+
+            const msg = await message.reply({ embeds: [mainEmbed], components: rows });
+            if (targetUser.id !== authorId) return;
+
+            const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
+            collector.on('collect', async (i) => {
+                if (i.customId === 'edit_profile') {
+                    const editRow = new ActionRowBuilder().addComponents(
+                        new StringSelectMenuBuilder().setCustomId('profile_field').setPlaceholder('Que voulez-vous modifier ?')
+                            .addOptions([
+                                { label: 'Ma Biographie', value: 'bio', description: 'Texte de présentation' },
+                                { label: 'Mon Genre', value: 'gender', description: 'Masculin / Féminin / Autre' },
+                                { label: 'Nom de Lignée', value: 'name', description: 'Renommer votre famille (Chef/Parent)' },
+                                { label: 'Prendre le nom du conjoint', value: 'spouse_name', description: 'Si vous êtes marié(e)' }
+                            ])
+                    );
+                    return i.update({ content: "Sélectionnez l'élément à modifier :", components: [editRow] });
+                }
+                
+                if (i.values?.[0] === 'bio') {
+                    const modal = new ModalBuilder().setCustomId('modal_bio').setTitle('Modifier ma Bio');
+                    const input = new TextInputBuilder().setCustomId('bio_text').setLabel("Votre présentation").setStyle(TextInputStyle.Paragraph).setRequired(true);
+                    modal.addComponents(new ActionRowBuilder().addComponents(input));
+                    return i.showModal(modal);
+                }
+
+                if (i.values?.[0] === 'gender') {
+                    const gRow = new ActionRowBuilder().addComponents(
+                        new StringSelectMenuBuilder().setCustomId('select_gender').setPlaceholder('Choisir mon genre')
+                            .addOptions([
+                                { label: 'Masculin', value: 'masculin' },
+                                { label: 'Féminin', value: 'féminin' },
+                                { label: 'Autre', value: 'autre' }
+                            ])
+                    );
+                    return i.update({ content: "Quel est votre genre ?", components: [gRow] });
+                }
+
+                if (i.customId === 'select_gender') {
+                    await db.updateUser(authorId, { gender: i.values[0] });
+                    return i.update({ content: `✅ Genre mis à jour sur **${i.values[0]}**.`, components: [] });
+                }
+
+                if (i.values?.[0] === 'spouse_name') {
+                    if (!authorData.spouse) return i.reply({ content: "❌ Pas de conjoint.", ephemeral: true });
+                    const sData = await db.getOrCreateUser(authorData.spouse);
+                    if (!sData.familyName) return i.reply({ content: "❌ Pas de nom de famille.", ephemeral: true });
+                    await db.updateUser(authorId, { familyName: sData.familyName });
+                    return i.update({ content: "💍 Nom mis à jour !", components: [] });
+                }
+
+                if (i.values?.[0] === 'name') {
+                    const modal = new ModalBuilder().setCustomId('modal_rename_branch').setTitle('Renommer ma Branche');
+                    const input = new TextInputBuilder().setCustomId('new_name').setLabel("Nouveau nom").setStyle(TextInputStyle.Short).setRequired(true);
+                    modal.addComponents(new ActionRowBuilder().addComponents(input));
+                    return i.showModal(modal);
+                }
+            });
+            return;
         }
 
         case 'hug': {
