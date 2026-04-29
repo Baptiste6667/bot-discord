@@ -27,9 +27,9 @@ require('dotenv').config();
 const PREFIX = process.env.PREFIX || ',';
 
 const ROLES_LIST = [
-    'parent', 'enfant', 'conjoint', 'frère', 'soeur', 
-    'oncle', 'tante', 'cousin', 'cousine', 
-    'grand-père', 'grand-mère', 'amoureux'
+    'parent', 'enfant', 'frère', 'soeur', 
+    'oncle', 'tante', 'cousin', 'cousine',
+    'grand-père', 'grand-mère'
 ];
 
 // Clears all family links for a given user
@@ -448,11 +448,11 @@ async function sendInvitation(interaction, author, target, role, action, fromVot
     let inviteEmbed = new EmbedBuilder()
         .setTitle("📩 Invitation Familiale")
         .setColor("#FFD700")
-        .setDescription(`${target}, **${author.username}** souhaite vous lier en tant que **${role}**.\n${fromVote ? "*(Approuvé par vote)*" : ""}`)
+        .setDescription(`${target}, **${author.username}** souhaite vous lier en tant que **${role}**.\n${fromVote ? "*(Approuvé par vote)*" : ""}\n\nAcceptez-vous de rejoindre cette famille ?`)
         .setFooter({ text: "Acceptez-vous de rejoindre cette famille ?" });
 
     let row;
-    if (targetData.familyName && authorData.familyName && targetData.familyName !== authorData.familyName) {
+    if (targetData.familyName && authorData.familyName && targetData.familyName !== authorData.familyName && role !== 'conjoint') {
         inviteEmbed.setDescription(`${target}, **${author.username}** souhaite vous lier en tant que **${role}**.\n\nVous avez déjà une famille (**${targetData.familyName.toUpperCase()}**). Voulez-vous fusionner vos lignées ou quitter la vôtre ?`);
         row = new ActionRowBuilder().addComponents(
             new ButtonBuilder().setCustomId('i_ok').setLabel('Accepter & Quitter').setStyle(ButtonStyle.Success),
@@ -460,7 +460,8 @@ async function sendInvitation(interaction, author, target, role, action, fromVot
             new ButtonBuilder().setCustomId('i_no').setLabel('Refuser').setStyle(ButtonStyle.Danger)
         );
     } else {
-        row = new ActionRowBuilder().addComponents(
+        // If role is 'conjoint', only offer accept/refuse. No merge option.
+        row = new ActionRowBuilder().addComponents( 
             new ButtonBuilder().setCustomId('i_ok').setLabel('Accepter').setStyle(ButtonStyle.Success),
             new ButtonBuilder().setCustomId('i_no').setLabel('Refuser').setStyle(ButtonStyle.Danger)
         );
@@ -470,7 +471,7 @@ async function sendInvitation(interaction, author, target, role, action, fromVot
     const msg = await interaction[method]({ content: `${target}`, embeds: [inviteEmbed], components: [row] });
 
     const collector = (msg || await interaction.fetchReply()).createMessageComponentCollector({ componentType: ComponentType.Button, time: 300000 });
-
+    
     collector.on('collect', async (i) => {
         if (i.user.id !== target.id) return i.reply({ content: "Ce n'est pas pour vous.", ephemeral: true });
 
