@@ -584,7 +584,8 @@ client.on('messageCreate', async (message) => {
             const row = new ActionRowBuilder().addComponents(
                 new StringSelectMenuBuilder().setCustomId('admin_action').setPlaceholder('Action...')
                     .addOptions([
-                        { label: 'Ajouter/Modifier un membre', value: 'add' },
+                        { label: 'Ajouter un membre', value: 'add' },
+                        { label: 'Modifier un membre', value: 'modify' },
                         { label: 'Supprimer un membre', value: 'remove' },
                         { label: 'Réinitialiser la famille', value: 'clear' },
                         { label: 'Fermer', value: 'cancel' }
@@ -612,7 +613,7 @@ client.on('messageCreate', async (message) => {
                         const user = client.users.cache.get(mId) || await client.users.fetch(mId).catch(() => null);
                         return { label: user ? user.username : mId, value: mId };
                     }));
-                    targetSelectRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('target').setPlaceholder('Choisir le membre à modifier/retirer...').addOptions(options));
+                    targetSelectRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('target').setPlaceholder(`Choisir le membre à ${action === 'remove' ? 'retirer' : 'modifier'}...`).addOptions(options));
                 }
                 await i.update({ content: `Action: **${action}**. Sélectionnez le membre.`, components: [targetSelectRow] });
 
