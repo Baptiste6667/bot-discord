@@ -623,21 +623,21 @@ client.on('messageCreate', async (message) => {
                         filter: subI => subI.user.id === authorId && subI.customId === 'target', 
                         time: 60000 
                     });
+                    await ui.deferUpdate(); // Acquittement immédiat pour éviter le timeout de 3s
 
                     const targetId = ui.values[0];
                     const targetData = await db.getOrCreateUser(targetId);
 
                     if (action === 'add' && targetData.familyName === family._id) {
-                        await ui.reply({ content: "❌ Cet utilisateur est déjà dans cette famille.", flags: MessageFlags.Ephemeral });
+                        await ui.followUp({ content: "❌ Cet utilisateur est déjà dans cette famille.", flags: MessageFlags.Ephemeral });
                         return msg.delete();
                     }
                     if ((action === 'remove' || action === 'modify') && targetData.familyName !== family._id) {
-                        await ui.reply({ content: "❌ Cet utilisateur n'est pas dans cette famille.", flags: MessageFlags.Ephemeral });
+                        await ui.followUp({ content: "❌ Cet utilisateur n'est pas dans cette famille.", flags: MessageFlags.Ephemeral });
                         return msg.delete();
                     }
 
                     if (action === 'remove') {
-                        await ui.deferUpdate();
                         await executeLinkChange(family.head, targetId, null, 'remove');
                         await msg.delete();
                         return ui.channel.send(`✅ Membre <@${targetId}> retiré de la famille.`);
@@ -648,14 +648,16 @@ client.on('messageCreate', async (message) => {
                             .addOptions(ROLES_LIST.map(r => ({ label: r, value: r }))),
                         new ButtonBuilder().setCustomId('cancel_role').setLabel('Annuler').setStyle(ButtonStyle.Danger)
                     );
-                    await ui.update({ content: `Attribuer un rôle à <@${targetId}> :`, components: [rMenu] });
+                    
+                    // On utilise editReply car l'interaction a été "deferred"
+                    await ui.editReply({ content: `Attribuer un rôle à <@${targetId}> :`, components: [rMenu] });
 
                     try {
                         const ri = await i.message.awaitMessageComponent({ 
                             filter: subI => subI.user.id === authorId && ['role', 'cancel_role'].includes(subI.customId), 
                             time: 60000 
                         });
-                        await ri.deferUpdate();
+                        await ri.deferUpdate(); // Acquittement immédiat
                         
                         if (ri.customId === 'cancel_role') return i.message.delete();
                         
@@ -668,10 +670,12 @@ client.on('messageCreate', async (message) => {
                         await msg.delete();
                         return ri.channel.send(`✅ Rôle **${ri.values[0]}** mis à jour pour <@${targetId}>.`);
                     } catch (e) {
-                        await msg.edit({ content: "Temps écoulé pour le choix du rôle.", components: [] });
+                        console.error("Erreur sélection rôle admin:", e);
+                        await msg.edit({ content: "Action annulée ou temps écoulé pour le choix du rôle.", components: [] }).catch(() => {});
                     }
                 } catch (e) {
-                    await msg.edit({ content: "Temps écoulé pour la sélection du membre.", components: [] });
+                    console.error("Erreur sélection membre admin:", e);
+                    await msg.edit({ content: "Action annulée ou temps écoulé pour la sélection du membre.", components: [] }).catch(() => {});
                 }
             });
             coll.on('end', () => msg.edit({ components: [] }).catch(() => {}));
@@ -790,35 +794,43 @@ client.on('messageCreate', async (message) => {
                         filter: subI => subI.user.id === authorId && subI.customId === 'u', 
                         time: 60000 
                     });
+                    await ui.deferUpdate();
 
                     const targetId = ui.values[0];
                     const targetData = await db.getOrCreateUser(targetId);
-                    const targetUser = client.users.cache.get(targetId) || await client.users.fetch(targetId);
+                    const targetUser = client.users.cache.get(targetId) || await client.users.fetch(targetId).catch(() => null);
+
+                    if (!targetUser) {
+                        await ui.followUp({ content: "❌ Impossible de trouver cet utilisateur.", flags: MessageFlags.Ephemeral });
+                        return msg.delete();
+                    }
 
                     if (action === 'add' && targetData.familyName === authorData.familyName) {
-                        await ui.reply({ content: "❌ Cet utilisateur est déjà dans votre famille.", flags: MessageFlags.Ephemeral });
+                        await ui.followUp({ content: "❌ Cet utilisateur est déjà dans votre famille.", flags: MessageFlags.Ephemeral });
                         return msg.delete();
                     }
                     if ((action === 'remove' || action === 'modify') && targetData.familyName !== authorData.familyName) {
-                        await ui.reply({ content: "❌ Cet utilisateur n'est pas dans votre famille.", flags: MessageFlags.Ephemeral });
+                        await ui.followUp({ content: "❌ Cet utilisateur n'est pas dans votre famille.", flags: MessageFlags.Ephemeral });
                         return msg.delete();
                     }
 
                     if (action === 'remove') return startFamilyVote(ui, message.author, targetUser, 'Aucun', 'remove');
 
                     const rMenu = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('r').setPlaceholder('Rôle...').addOptions(ROLES_LIST.map(r => ({ label: r, value: r }))));
-                    await ui.update({ content: `Rôle pour <@${targetUser.id}> :`, components: [rMenu] });
+                    await ui.editReply({ content: `Rôle pour <@${targetUser.id}> :`, components: [rMenu] });
 
                     const ri = await i.message.awaitMessageComponent({ 
                         filter: subI => subI.user.id === authorId && subI.customId === 'r', 
                         componentType: ComponentType.StringSelect, 
                         time: 60000 
                     });
+                    await ri.deferUpdate();
 
-                        if (action === 'add') await sendInvitation(ri, message.author, targetUser, ri.values[0], 'add');
-                        else await startFamilyVote(ri, message.author, targetUser, ri.values[0], 'modify');
+                    if (action === 'add') await sendInvitation(ri, message.author, targetUser, ri.values[0], 'add');
+                    else await startFamilyVote(ri, message.author, targetUser, ri.values[0], 'modify');
                 } catch (e) {
-                    await msg.edit({ content: "Action annulée ou temps écoulé.", components: [] });
+                    console.error("Erreur family (membre/rôle):", e);
+                    await msg.edit({ content: "Action annulée ou temps écoulé.", components: [] }).catch(() => {});
                 }
             });
             collector.on('end', () => msg.edit({ components: [] }).catch(() => {}));
