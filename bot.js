@@ -561,6 +561,10 @@ client.on('messageCreate', async (message) => {
     const authorData = await db.getOrCreateUser(authorId);
 
     const target = message.mentions.users.first();
+    if (['adminfamily', 'family', 'account', 'info'].includes(command)) {
+        await message.channel.sendTyping();
+    }
+
     let response = null;
 
     switch (command) {
@@ -583,7 +587,7 @@ client.on('messageCreate', async (message) => {
                         { label: 'Ajouter/Modifier un membre', value: 'add' },
                         { label: 'Supprimer un membre', value: 'remove' },
                         { label: 'Réinitialiser la famille', value: 'clear' },
-                        { label: 'Annuler', value: 'cancel' }
+                        { label: 'Fermer', value: 'cancel' }
                     ])
             );
 
@@ -591,23 +595,33 @@ client.on('messageCreate', async (message) => {
             const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && i.customId === 'admin_action', time: 30000 });
 
             coll.on('collect', async (i) => {
-                if (i.values[0] === 'cancel') return coll.stop();
+                if (i.values[0] === 'cancel') return i.message.delete();
                 if (i.values[0] === 'clear') {
                     for (const mId of family.members) await db.updateUser(mId, { familyName: null, spouse: null, children: [], parents: [] });
                     await db.deleteFamily(familyName);
-                    return i.update({ content: `✅ Famille ${familyName} supprimée.`, components: [], embeds: [] });
+                    await i.message.delete();
+                    return i.channel.send(`✅ Famille **${familyName.toUpperCase()}** supprimée.`);
                 }
 
                 const action = i.values[0];
-                const uSelect = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('target').setPlaceholder('Choisir le membre...'));
-                await i.update({ content: `Action: ${action}. Sélectionnez le membre.`, components: [uSelect] });
+                let targetSelectRow;
+                if (action === 'add') {
+                    targetSelectRow = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('target').setPlaceholder('Choisir le membre à ajouter...'));
+                } else {
+                    const options = await Promise.all(family.members.map(async (mId) => {
+                        const user = client.users.cache.get(mId) || await client.users.fetch(mId).catch(() => null);
+                        return { label: user ? user.username : mId, value: mId };
+                    }));
+                    targetSelectRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('target').setPlaceholder('Choisir le membre à modifier/retirer...').addOptions(options));
+                }
+                await i.update({ content: `Action: **${action}**. Sélectionnez le membre.`, components: [targetSelectRow] });
 
                 try {
                     const ui = await msg.awaitMessageComponent({ 
                         filter: subI => subI.user.id === authorId, 
-                        componentType: ComponentType.UserSelect, 
                         time: 30000 
                     });
+                    await ui.deferUpdate();
 
                     const targetId = ui.values[0];
                     const targetData = await db.getOrCreateUser(targetId);
@@ -640,7 +654,8 @@ client.on('messageCreate', async (message) => {
                             componentType: ComponentType.StringSelect, 
                             time: 30000 
                         });
-
+                        await ri.deferUpdate();
+                        
                         await executeLinkChange(family.head, targetId, ri.values[0], 'add');
                         await db.updateUser(targetId, { familyName: family._id });
                         if (!family.members.includes(targetId)) {
@@ -710,31 +725,45 @@ client.on('messageCreate', async (message) => {
             const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['fam_action', 'create_fam', 'cancel_main'].includes(i.customId), time: 30000 });
 
             collector.on('collect', async (i) => {
-                if (i.customId === 'cancel' || i.values?.[0] === 'cancel') return collector.stop();
+                if (i.customId === 'cancel_main' || i.values?.[0] === 'cancel') return i.message.delete();
+                
                 if (i.customId === 'create_fam') {
                     const modal = new ModalBuilder().setCustomId('modal_create_fam').setTitle('Nouvelle Famille');
                     modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('fam_name').setLabel("Nom de famille").setStyle(TextInputStyle.Short).setRequired(true)));
                     return i.showModal(modal);
                 }
+
                 const action = i.values[0];
                 if (action === 'delete') {
                     const confirm = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('confirm_del').setLabel('Confirmer').setStyle(ButtonStyle.Danger));
                     return i.update({ content: "⚠️ Dissoudre la famille ?", components: [confirm] });
                 }
+
                 if (action === 'leave') {
                     await clearUserFamilyLinks(authorId);
-                    return i.update({ content: "👋 Famille quittée.", components: [], embeds: [] });
+                    await i.message.delete();
+                    return i.channel.send(`👋 ${message.author} a quitté sa famille.`);
                 }
 
-                const uSelect = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('Choisir...'));
-                await i.update({ content: `Action : ${action}.`, components: [uSelect] });
+                let targetSelectRow;
+                if (action === 'add') {
+                    targetSelectRow = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('Choisir le futur membre...'));
+                } else {
+                    const family = await db.getFamily(authorData.familyName);
+                    const options = await Promise.all(family.members.map(async (mId) => {
+                        const user = client.users.cache.get(mId) || await client.users.fetch(mId).catch(() => null);
+                        return { label: user ? user.username : mId, value: mId };
+                    }));
+                    targetSelectRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('u').setPlaceholder('Choisir le membre de la famille...').addOptions(options));
+                }
+                await i.update({ content: `Action : **${action}**.`, components: [targetSelectRow] });
 
                 try {
                     const ui = await msg.awaitMessageComponent({ 
                         filter: subI => subI.user.id === authorId, 
-                        componentType: ComponentType.UserSelect, 
                         time: 30000 
                     });
+                    await ui.deferUpdate();
 
                     const targetId = ui.values[0];
                     const targetData = await db.getOrCreateUser(targetId);
@@ -811,10 +840,7 @@ client.on('messageCreate', async (message) => {
             const msg = await message.reply({ embeds: [initialEmbed], components: [row] });
             const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
             coll.on('collect', async (i) => {
-                if (i.customId === 'cancel_bank') {
-                    await i.message.delete();
-                    return;
-                }
+                if (i.customId === 'cancel_bank') return i.message.delete();
                 await i.deferUpdate();
                 const newEmbed = (i.customId === 'v_top') ? await showTop() : await showWealth(authorId, authorData);
                 await i.editReply({ embeds: [newEmbed] });
@@ -833,6 +859,7 @@ client.on('messageCreate', async (message) => {
                     { name: '🏠 Famille', value: `\`${PREFIX}family\` : Dashboard personnel.\n\`${PREFIX}family <Nom>\` : Voir l'arbre.` },
                     { name: 'ℹ️ Profil', value: `\`${PREFIX}info [@User]\` : Fiche d'identité et personnalisation.` },
                     { name: '💰 Fortune', value: `\`${PREFIX}account\` : Richesse du foyer et classement.` },
+                    { name: '💍 Social', value: `\`${PREFIX}divorce\`, \`${PREFIX}hug\`, \`${PREFIX}kiss\`, \`${PREFIX}pat\`, \`${PREFIX}slap\`, \`${PREFIX}poke\`` },
                     { name: '🛡️ Admin', value: `\`${PREFIX}adminfamily <Nom>\` : Gestion de dynastie.` }
                 );
             return message.reply({ embeds: [h] });
