@@ -608,7 +608,7 @@ client.on('messageCreate', async (message) => {
                 embed.setDescription("Vous ne possédez pas de famille. Souhaitez-vous fonder votre propre lignée ?");
                 rows.push(new ActionRowBuilder().addComponents(
                     new ButtonBuilder().setCustomId('create_fam').setLabel('Créer une famille').setStyle(ButtonStyle.Success),
-                    new ButtonBuilder().setCustomId('cancel').setLabel('Annuler').setStyle(ButtonStyle.Secondary)
+                    new ButtonBuilder().setCustomId('cancel_main').setLabel('Annuler').setStyle(ButtonStyle.Secondary)
                 ));
             } else {
                 const family = await db.getFamily(authorData.familyName);
