@@ -811,11 +811,15 @@ client.on('messageCreate', async (message) => {
             const msg = await message.reply({ embeds: [initialEmbed], components: [row] });
             const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
             coll.on('collect', async (i) => {
+                if (i.customId === 'cancel_bank') {
+                    await i.message.delete();
+                    return;
+                }
                 await i.deferUpdate();
                 const newEmbed = (i.customId === 'v_top') ? await showTop() : await showWealth(authorId, authorData);
                 await i.editReply({ embeds: [newEmbed] });
             });
-            coll.on('end', () => msg.edit({ components: [] }).catch(() => {}));
+            coll.on('end', async (collected, reason) => { if (reason === 'time') await msg.delete().catch(() => {}); });
             return;
         }
 
