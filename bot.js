@@ -546,7 +546,7 @@ client.on('messageCreate', async (message) => {
             );
 
             const msg = await message.reply({ embeds: [embed], components: [row] });
-            const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
+            const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && i.customId === 'admin_action', time: 30000 });
 
             coll.on('collect', async (i) => {
                 if (i.values[0] === 'cancel') return coll.stop();
@@ -650,7 +650,7 @@ client.on('messageCreate', async (message) => {
             }
 
             const msg = await message.reply({ embeds: [embed], components: rows });
-            const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
+            const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['fam_action', 'create_fam', 'cancel_main'].includes(i.customId), time: 30000 });
 
             collector.on('collect', async (i) => {
                 if (i.customId === 'cancel' || i.values?.[0] === 'cancel') return collector.stop();
