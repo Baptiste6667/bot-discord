@@ -411,7 +411,12 @@ async function startFamilyVote(interaction, author, target, role, action) {
         new ButtonBuilder().setCustomId('v_no').setLabel('NON (0)').setStyle(ButtonStyle.Danger)
     );
 
-    const voteMsg = await interaction.update({ embeds: [voteEmbed], components: [row], content: null });
+    let voteMsg;
+    if (interaction.replied || interaction.deferred) {
+        voteMsg = await interaction.editReply({ embeds: [voteEmbed], components: [row], content: null });
+    } else {
+        voteMsg = await interaction.update({ embeds: [voteEmbed], components: [row], content: null });
+    }
     let votesYes = new Set(), votesNo = new Set();
 
     const collector = voteMsg.createMessageComponentCollector({ componentType: ComponentType.Button, time: 60000 });
@@ -555,29 +560,45 @@ client.on('messageCreate', async (message) => {
                 const uSelect = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('target').setPlaceholder('Choisir le membre...'));
                 await i.update({ content: `Action: ${action}. Sélectionnez le membre.`, components: [uSelect] });
 
-                const uColl = msg.createMessageComponentCollector({ componentType: ComponentType.UserSelect, time: 30000 });
-                uColl.on('collect', async (ui) => {
+                try {
+                    const ui = await msg.awaitMessageComponent({ 
+                        filter: subI => subI.user.id === authorId, 
+                        componentType: ComponentType.UserSelect, 
+                        time: 30000 
+                    });
+
                     const targetId = ui.values[0];
                     if (action === 'remove') {
                         await executeLinkChange(family.head, targetId, null, 'remove');
                         return ui.update({ content: `✅ Membre retiré de la famille.`, components: [] });
                     }
+
                     const rMenu = new ActionRowBuilder().addComponents(
                         new StringSelectMenuBuilder().setCustomId('role').setPlaceholder('Rôle...')
                             .addOptions(ROLES_LIST.map(r => ({ label: r, value: r })))
                     );
                     await ui.update({ content: `Attribuer un rôle à <@${targetId}> :`, components: [rMenu] });
-                    const rColl = msg.createMessageComponentCollector({ componentType: ComponentType.StringSelect, time: 30000 });
-                    rColl.on('collect', async (ri) => {
+
+                    try {
+                        const ri = await msg.awaitMessageComponent({ 
+                            filter: subI => subI.user.id === authorId, 
+                            componentType: ComponentType.StringSelect, 
+                            time: 30000 
+                        });
+
                         await executeLinkChange(family.head, targetId, ri.values[0], 'add');
                         await db.updateUser(targetId, { familyName: family._id });
                         if (!family.members.includes(targetId)) {
                             family.members.push(targetId);
                             await db.updateFamily(family._id, { members: family.members });
                         }
-                        await ri.update({ content: `✅ Rôle ${ri.values[0]} mis à jour pour <@${targetId}>.`, components: [] });
-                    });
-                });
+                        return ri.update({ content: `✅ Rôle ${ri.values[0]} mis à jour pour <@${targetId}>.`, components: [] });
+                    } catch (e) {
+                        await msg.edit({ content: "Temps écoulé pour le choix du rôle.", components: [] });
+                    }
+                } catch (e) {
+                    await msg.edit({ content: "Temps écoulé pour la sélection du membre.", components: [] });
+                }
             });
             coll.on('end', () => msg.edit({ components: [] }).catch(() => {}));
             return;
@@ -649,18 +670,33 @@ client.on('messageCreate', async (message) => {
                 }
                 const uSelect = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('Choisir...'));
                 await i.update({ content: `Action : ${action}.`, components: [uSelect] });
-                const uColl = msg.createMessageComponentCollector({ componentType: ComponentType.UserSelect, time: 30000 });
-                uColl.on('collect', async (ui) => {
-                    const targetUser = await client.users.fetch(ui.values[0]);
+
+                try {
+                    const ui = await msg.awaitMessageComponent({ 
+                        filter: subI => subI.user.id === authorId, 
+                        componentType: ComponentType.UserSelect, 
+                        time: 30000 
+                    });
+
+                    const targetId = ui.values[0];
+                    const targetUser = client.users.cache.get(targetId) || await client.users.fetch(targetId);
+
                     if (action === 'remove') return startFamilyVote(ui, message.author, targetUser, 'Aucun', 'remove');
+
                     const rMenu = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('r').setPlaceholder('Rôle...').addOptions(ROLES_LIST.map(r => ({ label: r, value: r }))));
                     await ui.update({ content: `Rôle pour <@${targetUser.id}> :`, components: [rMenu] });
-                    const rColl = msg.createMessageComponentCollector({ componentType: ComponentType.StringSelect, time: 30000 });
-                    rColl.on('collect', async (ri) => {
+
+                    const ri = await msg.awaitMessageComponent({ 
+                        filter: subI => subI.user.id === authorId, 
+                        componentType: ComponentType.StringSelect, 
+                        time: 30000 
+                    });
+
                         if (action === 'add') await sendInvitation(ri, message.author, targetUser, ri.values[0], 'add');
                         else await startFamilyVote(ri, message.author, targetUser, ri.values[0], 'modify');
-                    });
-                });
+                } catch (e) {
+                    await msg.edit({ content: "Action annulée ou temps écoulé.", components: [] });
+                }
             });
             collector.on('end', () => msg.edit({ components: [] }).catch(() => {}));
             return;
