@@ -594,7 +594,7 @@ client.on('messageCreate', async (message) => {
             );
 
             const msg = await message.reply({ embeds: [embed], components: [row] });
-            const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && i.customId === 'admin_action', time: 30000 });
+            const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && i.customId === 'admin_action', time: 120000 });
 
             coll.on('collect', async (i) => {
                 if (i.values[0] === 'cancel') return i.message.delete();
@@ -619,9 +619,9 @@ client.on('messageCreate', async (message) => {
                 await i.update({ content: `Action: **${action}**. Sélectionnez le membre.`, components: [targetSelectRow] });
 
                 try {
-                    const ui = await msg.awaitMessageComponent({ 
-                        filter: subI => subI.user.id === authorId, 
-                        time: 30000 
+                    const ui = await i.message.awaitMessageComponent({ 
+                        filter: subI => subI.user.id === authorId && subI.customId === 'target', 
+                        time: 60000 
                     });
                     await ui.deferUpdate();
 
@@ -651,12 +651,13 @@ client.on('messageCreate', async (message) => {
                     await ui.update({ content: `Attribuer un rôle à <@${targetId}> :`, components: [rMenu] });
 
                     try {
-                        const ri = await msg.awaitMessageComponent({ 
-                            filter: subI => subI.user.id === authorId, 
-                            componentType: ComponentType.StringSelect, 
-                            time: 30000 
+                        const ri = await i.message.awaitMessageComponent({ 
+                            filter: subI => subI.user.id === authorId && ['role', 'cancel_role'].includes(subI.customId), 
+                            time: 60000 
                         });
                         await ri.deferUpdate();
+                        
+                        if (ri.customId === 'cancel_role') return i.message.delete();
                         
                         await executeLinkChange(family.head, targetId, ri.values[0], 'add');
                         await db.updateUser(targetId, { familyName: family._id });
@@ -748,7 +749,7 @@ client.on('messageCreate', async (message) => {
             }
 
             const msg = await message.reply({ embeds: [embed], components: rows });
-            const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['fam_action', 'create_fam', 'cancel_main'].includes(i.customId), time: 30000 });
+            const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['fam_action', 'create_fam', 'cancel_main'].includes(i.customId), time: 120000 });
 
             collector.on('collect', async (i) => {
                 if (i.customId === 'cancel_main' || i.values?.[0] === 'cancel') return i.message.delete();
@@ -785,9 +786,9 @@ client.on('messageCreate', async (message) => {
                 await i.update({ content: `Action : **${action}**.`, components: [targetSelectRow] });
 
                 try {
-                    const ui = await msg.awaitMessageComponent({ 
-                        filter: subI => subI.user.id === authorId, 
-                        time: 30000 
+                    const ui = await i.message.awaitMessageComponent({ 
+                        filter: subI => subI.user.id === authorId && subI.customId === 'u', 
+                        time: 60000 
                     });
                     await ui.deferUpdate();
 
@@ -809,10 +810,10 @@ client.on('messageCreate', async (message) => {
                     const rMenu = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('r').setPlaceholder('Rôle...').addOptions(ROLES_LIST.map(r => ({ label: r, value: r }))));
                     await ui.update({ content: `Rôle pour <@${targetUser.id}> :`, components: [rMenu] });
 
-                    const ri = await msg.awaitMessageComponent({ 
-                        filter: subI => subI.user.id === authorId, 
+                    const ri = await i.message.awaitMessageComponent({ 
+                        filter: subI => subI.user.id === authorId && subI.customId === 'r', 
                         componentType: ComponentType.StringSelect, 
-                        time: 30000 
+                        time: 60000 
                     });
 
                         if (action === 'add') await sendInvitation(ri, message.author, targetUser, ri.values[0], 'add');
