@@ -623,7 +623,6 @@ client.on('messageCreate', async (message) => {
                         filter: subI => subI.user.id === authorId && subI.customId === 'target', 
                         time: 60000 
                     });
-                    await ui.deferUpdate();
 
                     const targetId = ui.values[0];
                     const targetData = await db.getOrCreateUser(targetId);
@@ -638,6 +637,7 @@ client.on('messageCreate', async (message) => {
                     }
 
                     if (action === 'remove') {
+                        await ui.deferUpdate();
                         await executeLinkChange(family.head, targetId, null, 'remove');
                         await msg.delete();
                         return ui.channel.send(`✅ Membre <@${targetId}> retiré de la famille.`);
@@ -790,7 +790,6 @@ client.on('messageCreate', async (message) => {
                         filter: subI => subI.user.id === authorId && subI.customId === 'u', 
                         time: 60000 
                     });
-                    await ui.deferUpdate();
 
                     const targetId = ui.values[0];
                     const targetData = await db.getOrCreateUser(targetId);
