@@ -805,7 +805,7 @@ client.on('messageCreate', async (message) => {
             const initialEmbed = (command === 'familytop') ? await showTop() : await showWealth(authorId, authorData);
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('v_wealth').setLabel('Ma Fortune').setStyle(ButtonStyle.Success),
-                new ButtonBuilder().setCustomId('v_top').setLabel('🏆 Classement').setStyle(ButtonStyle.Primary)
+                new ButtonBuilder().setCustomId('v_top').setLabel('🏆 Classement').setStyle(ButtonStyle.Primary),
                 new ButtonBuilder().setCustomId('cancel_bank').setLabel('❌').setStyle(ButtonStyle.Secondary)
             );
             const msg = await message.reply({ embeds: [initialEmbed], components: [row] });
