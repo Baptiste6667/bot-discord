@@ -33,7 +33,8 @@ async function getOrCreateUser(userId) {
       _id: userId,
       spouse: null,
       children: [],
-      parents: [],
+      mother: null,
+      father: null,
       customLinks: {},
       familyName: null,
       bio: "",
@@ -98,7 +99,8 @@ async function clearUserFamilyLinksDB(userId) {
             // Logique de succession : on cherche les membres sans parents dans la famille (les plus "vieux")
             const results = await Promise.all(family.members.map(async mId => {
                 const mData = await getOrCreateUser(mId);
-                const hasParentInFamily = mData.parents.some(pId => family.members.includes(pId));
+                const hasParentInFamily = (mData.mother && family.members.includes(mData.mother)) || 
+                                          (mData.father && family.members.includes(mData.father));
                 return { mId, isPotential: !hasParentInFamily };
             }));
             
@@ -117,7 +119,7 @@ async function clearUserFamilyLinksDB(userId) {
     }
   }
 
-  await updateUser(userId, { spouse: null, children: [], parents: [], customLinks: {}, familyName: null });
+  await updateUser(userId, { spouse: null, children: [], mother: null, father: null, customLinks: {}, familyName: null });
 }
 
 module.exports = {

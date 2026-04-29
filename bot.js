@@ -27,7 +27,7 @@ require('dotenv').config();
 const PREFIX = process.env.PREFIX || ',';
 
 const ROLES_LIST = [
-    'parent', 'enfant', 'frère', 'soeur', 
+    'père', 'mère', 'enfant', 'frère', 'soeur', 
     'oncle', 'tante', 'cousin', 'cousine',
     'grand-père', 'grand-mère'
 ];
@@ -127,11 +127,13 @@ async function generateFamilyImage(client, userId) {
         ctx.beginPath(); ctx.moveTo(centerX + 85, centerY); ctx.lineTo(centerX + 115, centerY); ctx.stroke();
         await drawNode(userData.spouse, centerX + 200, centerY);
     }
-    for (let i = 0; i < userData.parents.length; i++) {
+    const parents = [userData.father, userData.mother].filter(p => p !== null);
+    for (let i = 0; i < parents.length; i++) {
         const xPos = centerX - 100 + (i * 200);
         ctx.beginPath(); ctx.moveTo(centerX, centerY - 25); ctx.lineTo(xPos, 100 + 25); ctx.stroke();
-        await drawNode(userData.parents[i], xPos, 100);
+        await drawNode(parents[i], xPos, 100);
     }
+
     const children = userData.children.slice(0, 3);
     for (let i = 0; i < children.length; i++) {
         const xPos = 200 + (i * 200);
@@ -151,21 +153,20 @@ async function getExtendedFamily(userId) {
     const unclesAunts = new Set();
     const cousins = new Set();
 
-    // Siblings & Grandparents logic
-    for (const pId of user.parents) {
+    const parents = [user.father, user.mother].filter(p => p !== null);
+    for (const pId of parents) {
         const parentData = await db.getOrCreateUser(pId);
         for (const cId of parentData.children) {
             if (cId !== userId) siblings.add(cId);
         }
-        for (const gpId of parentData.parents) {
-            grandparents.add(gpId);
-        }
+        if (parentData.father) grandparents.add(parentData.father);
+        if (parentData.mother) grandparents.add(parentData.mother);
     }
 
-    // Uncles/Aunts & Cousins logic
-    for (const pId of user.parents) {
+    for (const pId of parents) {
         const parentData = await db.getOrCreateUser(pId);
-        for (const gpId of parentData.parents) {
+        const gps = [parentData.father, parentData.mother].filter(gp => gp !== null);
+        for (const gpId of gps) {
             const gpData = await db.getOrCreateUser(gpId);
             for (const siblingOfParentId of gpData.children) {
                 if (siblingOfParentId !== pId) {
@@ -198,8 +199,9 @@ async function getReverseRole(role, targetData = null) { // Made async as target
         'beau-fils': 'beau-parent', 'belle-fille': 'beau-parent',
         'amoureux': gender === 'féminin' ? 'amoureuse' : 'amoureux',
         'amoureuse': gender === 'masculin' ? 'amoureux' : 'amoureuse',
-        'parent': gender === 'féminin' ? 'fille' : (gender === 'masculin' ? 'fils' : 'enfant'),
-        'enfant': gender === 'féminin' ? 'mère' : (gender === 'masculin' ? 'père' : 'parent')
+        'père': gender === 'féminin' ? 'fille' : (gender === 'masculin' ? 'fils' : 'enfant'),
+        'mère': gender === 'féminin' ? 'fille' : (gender === 'masculin' ? 'fils' : 'enfant'),
+        'enfant': gender === 'féminin' ? 'mère' : (gender === 'masculin' ? 'père' : 'père')
     };
     return mapping[role] || role;
 }
@@ -239,7 +241,8 @@ async function areRelated(id1, id2) { // Made async
     
     if (u1.customLinks && u1.customLinks[id2]) return u1.customLinks[id2];
     if (u1.spouse === id2) return 'conjoint(e)';
-    if (u1.parents.includes(id2)) return 'parent';
+    if (u1.father === id2) return 'père';
+    if (u1.mother === id2) return 'mère';
     if (u1.children.includes(id2)) return 'enfant';
 
     const ext = await getExtendedFamily(id1); // Call async version
@@ -294,13 +297,14 @@ async function mergeFamilies(inviterFamilyName, invitedFamilyName, inviterId, in
 
     if (role === 'oncle' || role === 'tante') {
         // La cible devient le frère/soeur d'un des parents de l'inviteur
-        if (inviter.parents.length > 0) {
-            const parentId = inviter.parents[0];
+        const parentId = inviter.father || inviter.mother;
+        if (parentId) {
             const pData = await db.getOrCreateUser(parentId);
-            if (pData && pData.parents.length > 0) {
+            if (pData && (pData.father || pData.mother)) {
                 // On donne à l'invité les mêmes parents que le parent de l'inviteur (les grands-parents)
-                await db.updateUser(invitedId, { parents: [...pData.parents] });
-                for (const gpId of pData.parents) {
+                await db.updateUser(invitedId, { father: pData.father, mother: pData.mother });
+                const gps = [pData.father, pData.mother].filter(g => g !== null);
+                for (const gpId of gps) {
                     const gpData = await db.getOrCreateUser(gpId);
                     if (gpData && !gpData.children.includes(invitedId)) {
                         gpData.children.push(invitedId);
@@ -311,9 +315,10 @@ async function mergeFamilies(inviterFamilyName, invitedFamilyName, inviterId, in
         }
     } else if (role === 'frère' || role === 'soeur') {
         // La cible partage les mêmes parents que l'inviteur
-        if (inviter.parents.length > 0) {
-            await db.updateUser(invitedId, { parents: [...inviter.parents] });
-            for (const pId of inviter.parents) {
+        if (inviter.father || inviter.mother) {
+            await db.updateUser(invitedId, { father: inviter.father, mother: inviter.mother });
+            const ps = [inviter.father, inviter.mother].filter(p => p !== null);
+            for (const pId of ps) {
                 const pData = await db.getOrCreateUser(pId);
                 if (pData && !pData.children.includes(invitedId)) {
                     pData.children.push(invitedId);
@@ -323,12 +328,12 @@ async function mergeFamilies(inviterFamilyName, invitedFamilyName, inviterId, in
         }
     } else if (role === 'grand-père' || role === 'grand-mère') {
         // La cible devient le parent d'un des parents de l'inviteur
-        if (inviter.parents.length > 0) {
-            const parentId = inviter.parents[0];
+        const parentId = inviter.father || inviter.mother;
+        if (parentId) {
             const pData = await db.getOrCreateUser(parentId);
-            if (pData && !pData.parents.includes(invitedId)) {
-                pData.parents.push(invitedId);
-                await db.updateUser(parentId, { parents: pData.parents });
+            if (pData) {
+                const field = role === 'grand-père' ? 'father' : 'mother';
+                await db.updateUser(parentId, { [field]: invitedId });
             }
             if (invited && !invited.children.includes(parentId)) {
                 invited.children.push(parentId);
@@ -361,7 +366,10 @@ async function executeLinkChange(id1, id2, role, action) { // No longer needs `d
     if (d1.spouse === id2) { d1.spouse = null; d2.spouse = null; }
     d1Update.children = d1.children.filter(id => id !== id2);
     d2Update.parents = d2.parents.filter(id => id !== id1);
-    d1Update.parents = d1.parents.filter(id => id !== id2);
+    if (d1.father === id2) d1Update.father = null;
+    if (d1.mother === id2) d1Update.mother = null;
+    if (d2.father === id1) d2Update.father = null;
+    if (d2.mother === id1) d2Update.mother = null;
     d2Update.children = d2.children.filter(id => id !== id1);
 
     // Ensure customLinks exist before trying to delete
@@ -384,12 +392,14 @@ async function executeLinkChange(id1, id2, role, action) { // No longer needs `d
 
     if (role === 'conjoint') {
         d1Update.spouse = id2; d2Update.spouse = id1;
-    } else if (role === 'parent') {
-        if (!d1Update.parents.includes(id2)) d1Update.parents.push(id2);
+    } else if (role === 'père' || role === 'mère') {
+        const field = role === 'père' ? 'father' : 'mother';
+        d1Update[field] = id2;
         if (!d2Update.children.includes(id1)) d2Update.children.push(id1);
     } else if (role === 'enfant') {
         if (!d1Update.children.includes(id2)) d1Update.children.push(id2);
-        if (!d2Update.parents.includes(id1)) d2Update.parents.push(id1);
+        const genderField = d1.gender === 'féminin' ? 'mother' : 'father';
+        d2Update[genderField] = id1;
     } else {
         d1Update.customLinks = { ...(d1Update.customLinks || d1.customLinks), [id2]: role };
         d2Update.customLinks = { ...(d2Update.customLinks || d2.customLinks), [id1]: await getReverseRole(role, d1) };
@@ -397,6 +407,33 @@ async function executeLinkChange(id1, id2, role, action) { // No longer needs `d
 
     await db.updateUser(id1, d1Update);
     await db.updateUser(id2, d2Update);
+    
+    // Logique de mariage automatique pour Oncles/Tantes et Grands-parents
+    if (['oncle', 'tante', 'grand-père', 'grand-mère'].includes(role)) {
+        await checkAndProposeMarriage(id2, d1.familyName);
+    }
+}
+
+async function checkAndProposeMarriage(userId, familyName) {
+    const family = await db.getFamily(familyName);
+    if (!family) return;
+    const userData = await db.getOrCreateUser(userId);
+    if (userData.spouse) return;
+
+    for (const mId of family.members) {
+        if (mId === userId) continue;
+        const mData = await db.getOrCreateUser(mId);
+        if (mData.spouse) continue;
+        
+        const rel = await areRelated(userId, mId);
+        const targetRel = await areRelated(mId, userId);
+        
+        if ((rel === 'oncle' && targetRel === 'tante') || (rel === 'tante' && targetRel === 'oncle') || 
+            (rel === 'grand-père' && targetRel === 'grand-mère') || (rel === 'grand-mère' && targetRel === 'grand-père')) {
+            // On pourrait déclencher une invitation ici, mais pour rester simple on informe juste
+            console.log(`Match romantique potentiel entre ${userId} et ${mId}`);
+        }
+    }
 }
 
 async function startFamilyVote(interaction, author, target, role, action) {
@@ -436,12 +473,14 @@ async function startFamilyVote(interaction, author, target, role, action) {
         if (votesYes.size > votesNo.size) {
             if (action === 'remove') {
                 await executeLinkChange(author.id, target.id, role, 'remove');
-                await interaction.editReply({ content: `✅ **Vote validé !** Lien rompu avec ${target}.`, embeds: [], components: [] });
+                await interaction.deleteReply();
+                await interaction.channel.send(`✅ **Vote validé !** Lien rompu entre ${author} et ${target}.`);
             } else {
                 await sendInvitation(interaction, author, target, role, action, true);
             }
         } else {
-            await interaction.editReply({ content: `❌ **Vote rejeté.** L'action a été annulée.`, embeds: [], components: [] });
+            await interaction.deleteReply();
+            await interaction.channel.send(`❌ **Vote rejeté.** L'action pour ${target} a été annulée.`);
         }
     });
 }
@@ -493,13 +532,16 @@ async function sendInvitation(interaction, author, target, role, action, fromVot
                 }
                 await db.updateUser(target.id, { familyName: authorData.familyName });
             }
-            await i.update({ content: `🎊 Félicitations ! ${target} est maintenant le/la **${role}** de ${author} !`, embeds: [], components: [] });
+            await i.message.delete();
+            await i.channel.send(`🎊 Félicitations ! ${target} est maintenant le/la **${role}** de ${author} !`);
         } else if (i.customId === 'i_merge') {
             await mergeFamilies(authorData.familyName, targetData.familyName, author.id, target.id, role);
             await executeLinkChange(author.id, target.id, role, action);
-            await i.update({ content: `🤝 Les familles ont fusionné ! ${target} est maintenant le/la **${role}** de ${author} !`, embeds: [], components: [] });
+            await i.message.delete();
+            await i.channel.send(`🤝 Les familles ont fusionné ! ${target} est maintenant le/la **${role}** de ${author} !`);
         } else {
-            await i.update({ content: `😔 ${target} a refusé.`, embeds: [], components: [] });
+            await i.message.delete();
+            await i.channel.send(`😔 ${target} a refusé l'invitation de ${author}.`);
         }
         collector.stop();
     });
@@ -568,14 +610,27 @@ client.on('messageCreate', async (message) => {
                     });
 
                     const targetId = ui.values[0];
+                    const targetData = await db.getOrCreateUser(targetId);
+
+                    if (action === 'add' && targetData.familyName === family._id) {
+                        await ui.reply({ content: "❌ Cet utilisateur est déjà dans cette famille.", ephemeral: true });
+                        return msg.delete();
+                    }
+                    if ((action === 'remove' || action === 'modify') && targetData.familyName !== family._id) {
+                        await ui.reply({ content: "❌ Cet utilisateur n'est pas dans cette famille.", ephemeral: true });
+                        return msg.delete();
+                    }
+
                     if (action === 'remove') {
                         await executeLinkChange(family.head, targetId, null, 'remove');
-                        return ui.update({ content: `✅ Membre retiré de la famille.`, components: [] });
+                        await msg.delete();
+                        return ui.channel.send(`✅ Membre <@${targetId}> retiré de la famille.`);
                     }
 
                     const rMenu = new ActionRowBuilder().addComponents(
                         new StringSelectMenuBuilder().setCustomId('role').setPlaceholder('Rôle...')
-                            .addOptions(ROLES_LIST.map(r => ({ label: r, value: r })))
+                            .addOptions(ROLES_LIST.map(r => ({ label: r, value: r }))),
+                        new ButtonBuilder().setCustomId('cancel_role').setLabel('Annuler').setStyle(ButtonStyle.Danger)
                     );
                     await ui.update({ content: `Attribuer un rôle à <@${targetId}> :`, components: [rMenu] });
 
@@ -592,7 +647,8 @@ client.on('messageCreate', async (message) => {
                             family.members.push(targetId);
                             await db.updateFamily(family._id, { members: family.members });
                         }
-                        return ri.update({ content: `✅ Rôle ${ri.values[0]} mis à jour pour <@${targetId}>.`, components: [] });
+                        await msg.delete();
+                        return ri.channel.send(`✅ Rôle **${ri.values[0]}** mis à jour pour <@${targetId}>.`);
                     } catch (e) {
                         await msg.edit({ content: "Temps écoulé pour le choix du rôle.", components: [] });
                     }
@@ -647,6 +703,7 @@ client.on('messageCreate', async (message) => {
                 if (isHead) menu.addOptions({ label: 'Dissoudre la famille', value: 'delete' });
                 menu.addOptions({ label: 'Annuler', value: 'cancel' });
                 rows.push(new ActionRowBuilder().addComponents(menu));
+                rows.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('cancel_main').setLabel('Fermer').setStyle(ButtonStyle.Secondary)));
             }
 
             const msg = await message.reply({ embeds: [embed], components: rows });
@@ -668,6 +725,7 @@ client.on('messageCreate', async (message) => {
                     await clearUserFamilyLinks(authorId);
                     return i.update({ content: "👋 Famille quittée.", components: [], embeds: [] });
                 }
+
                 const uSelect = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('Choisir...'));
                 await i.update({ content: `Action : ${action}.`, components: [uSelect] });
 
@@ -679,7 +737,17 @@ client.on('messageCreate', async (message) => {
                     });
 
                     const targetId = ui.values[0];
+                    const targetData = await db.getOrCreateUser(targetId);
                     const targetUser = client.users.cache.get(targetId) || await client.users.fetch(targetId);
+
+                    if (action === 'add' && targetData.familyName === authorData.familyName) {
+                        await ui.reply({ content: "❌ Cet utilisateur est déjà dans votre famille.", ephemeral: true });
+                        return msg.delete();
+                    }
+                    if ((action === 'remove' || action === 'modify') && targetData.familyName !== authorData.familyName) {
+                        await ui.reply({ content: "❌ Cet utilisateur n'est pas dans votre famille.", ephemeral: true });
+                        return msg.delete();
+                    }
 
                     if (action === 'remove') return startFamilyVote(ui, message.author, targetUser, 'Aucun', 'remove');
 
@@ -738,6 +806,7 @@ client.on('messageCreate', async (message) => {
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('v_wealth').setLabel('Ma Fortune').setStyle(ButtonStyle.Success),
                 new ButtonBuilder().setCustomId('v_top').setLabel('🏆 Classement').setStyle(ButtonStyle.Primary)
+                new ButtonBuilder().setCustomId('cancel_bank').setLabel('❌').setStyle(ButtonStyle.Secondary)
             );
             const msg = await message.reply({ embeds: [initialEmbed], components: [row] });
             const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
@@ -785,7 +854,8 @@ client.on('messageCreate', async (message) => {
                     { name: '👤 Genre', value: userData.gender || 'Non défini', inline: true },
                     { name: '📝 Bio', value: userData.bio || 'Aucune bio définie.', inline: false },
                     { name: '💍 Conjoint', value: userData.spouse ? formatMention(userData.spouse) : 'Célibataire', inline: true },
-                    { name: '👨‍👩‍👦 Parents', value: userData.parents.map(formatMention).join(', ') || 'Inconnus', inline: true }
+                    { name: '👨 Père', value: userData.father ? formatMention(userData.father) : 'Inconnu', inline: true },
+                    { name: '👩 Mère', value: userData.mother ? formatMention(userData.mother) : 'Inconnue', inline: true }
                 );
 
             const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('edit_p').setLabel('⚙️ Personnaliser').setStyle(ButtonStyle.Secondary));
