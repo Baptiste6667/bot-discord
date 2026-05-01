@@ -19,11 +19,9 @@ const {
     TextInputBuilder,
     TextInputStyle,
     MessageFlags,
-    InteractionType,
-    InteractionResponseType
+    InteractionType
 } = require('discord.js');
-// Remplace l'ancien require('canvas') par celui-ci :
-const { createCanvas, loadImage, GlobalFonts } = require('@napi-rs/canvas');
+const { createCanvas, loadImage, GlobalFonts } = require('@napi-rs/canvas'); // Utilisation de @napi-rs/canvas
 const path = require('path');
 const fs = require('fs');
 
@@ -33,7 +31,10 @@ try {
     if (fs.existsSync(fontPath)) {
         // La syntaxe change de registerFont(...) à GlobalFonts.registerFromPath(...)
         GlobalFonts.registerFromPath(fontPath, 'MyCustomFont');
-        console.log(`✅ Police enregistrée : ${fontPath}`);
+        console.log(`✅ Police enregistrée (alias: MyCustomFont) depuis : ${fontPath}`);
+    } else {
+        console.warn(`⚠️ Fichier font.ttf introuvable à l'emplacement : ${fontPath}`);
+        console.log("💡 Vérifie que le fichier est bien nommé 'font.ttf' (tout en minuscules) et qu'il est à la racine de ton dépôt GitHub.");
     }
 } catch (e) {
     console.error("❌ Erreur police :", e.message);
@@ -150,12 +151,12 @@ async function generateFamilyImage(client, userId) {
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'left';
                 ctx.font = '16px "MyCustomFont", sans-serif'; // Utiliser l'alias et un fallback générique
-                ctx.fillText(name.substring(0, 12), x - 15, y - 5);
+                ctx.fillText(String(name).substring(0, 12), x - 15, y - 5);
                 
                 // Dessin du rôle
                 ctx.font = '13px "MyCustomFont", sans-serif';
                 ctx.fillStyle = '#ffffff';
-                ctx.fillText((isHead ? "👑 " : "") + roleText, x - 15, y + 15);
+                ctx.fillText(String((isHead ? "👑 " : "") + roleText), x - 15, y + 15);
                 ctx.restore(); // Restaurer l'état après le texte
             } catch (err) {
                 console.error(`[DEBUG] Erreur chargement avatar/texte pour ${user.username}:`, err.message);
@@ -163,7 +164,7 @@ async function generateFamilyImage(client, userId) {
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'center';
                 ctx.font = '16px sans-serif'; // Fallback vers une police système générique
-                ctx.fillText(name.substring(0, 15), x, y);
+                ctx.fillText(String(name).substring(0, 15), x, y);
                 ctx.restore(); // Restaurer l'état après le texte de fallback
             }
         } else {
@@ -172,7 +173,7 @@ async function generateFamilyImage(client, userId) {
             ctx.fillStyle = '#ffffff';
             ctx.textAlign = 'center';
             ctx.font = '16px sans-serif'; // Fallback vers une police système générique
-            ctx.fillText(name.substring(0, 15), x, y);
+                ctx.fillText(String(name).substring(0, 15), x, y);
             ctx.restore(); // Restaurer l'état après le texte
         }
     };
@@ -186,7 +187,7 @@ async function generateFamilyImage(client, userId) {
         ctx.fillStyle = '#ffffff';
         ctx.font = '26px "MyCustomFont", sans-serif'; // Utiliser l'alias et un fallback générique
         ctx.textAlign = 'center';
-        ctx.fillText(`Lignée des ${family._id.toUpperCase()}`, 400, 45);
+        ctx.fillText(String(`Lignée des ${family._id.toUpperCase()}`), 400, 45);
         ctx.restore();
     }
 
@@ -221,14 +222,14 @@ async function generateFamilyImage(client, userId) {
     }
     const childrenData = (userData.children || []).slice(0, 5);
     for (let i = 0; i < childrenData.length; i++) {
-        const xPos = centerX + (i - (childrenData.length - 1) / 2) * (childrenData.length > 1 ? 740 / (Math.max(1, childrenData.length - 1)) : 0); // Éviter division par zéro
+        const xPos = centerX + (i - (childrenData.length - 1) / 2) * (childrenData.length > 1 ? 740 / Math.max(1, childrenData.length - 1) : 0); // Éviter division par zéro
         await drawNode(childrenData[i], xPos, 430, "Enfant");
     }
     
     await drawNode(userId, centerX, centerY, "Moi", '#5865F2');
 
     console.log("[DEBUG] Image générée avec succès, conversion en buffer...");
-    return canvas.toBuffer();
+    return canvas.toBuffer('image/png');
 }
 
 // This function now needs to be async as it fetches data from DB
@@ -781,6 +782,8 @@ client.on('messageCreate', async (message) => {
 
         case 'family': {
             try {
+                let embed;
+                let rows = [];
                 const isGlobalArg = args.some(a => ['global', 'lignée', 'toute'].includes(a.toLowerCase()));
                 const searchArgs = args.filter(a => !['global', 'lignée', 'toute'].includes(a.toLowerCase()));
 
@@ -815,7 +818,7 @@ client.on('messageCreate', async (message) => {
                     const attachment = new AttachmentBuilder(buffer, { name: 'family.png' });
                     const displayTitle = family._id.toUpperCase();
                     
-                    const embed = new EmbedBuilder()
+                    embed = new EmbedBuilder()
                         .setTitle(isGlobalArg ? `🌳 Lignée Complète : ${displayTitle}` : `🌿 Ma Branche : ${displayTitle}`)
                         .setColor('#5865F2')
                         .setImage('attachment://family.png')
@@ -833,8 +836,7 @@ client.on('messageCreate', async (message) => {
                     return message.reply({ embeds: [embed], files: [attachment] });
                 }
 
-                const embed = new EmbedBuilder().setTitle("🏠 Gestion de Famille").setColor("#5865F2");
-                const rows = [];
+                embed = new EmbedBuilder().setTitle("🏠 Gestion de Famille").setColor("#5865F2");
                 // ... reste du code original ...
             } catch (err) {
                 console.error("Erreur commande family:", err);
