@@ -701,7 +701,7 @@ client.on('messageCreate', async (message) => {
                     for (const mId of family.members) await db.updateUser(guildId, mId, { familyName: null, spouse: null, children: [], mother: null, father: null });
                     await db.deleteFamily(guildId, familyName);
                     await i.message.delete();
-                    return i.channel.send(`✅ Famille **${familyName.toUpperCase()}** supprimée.`);
+                    return autoDelete(await i.channel.send({ embeds: [successEmbed(`Famille **${familyName.toUpperCase()}** supprimée.`)] }), adminMsgTimeout);
                 }
 
                 const action = i.values[0];
@@ -746,7 +746,7 @@ client.on('messageCreate', async (message) => {
                     if (action === 'remove') {
                         await db.clearUserFamilyLinksDB(guildId, targetId);
                         await msg.delete().catch(() => {});
-                        return ui.channel.send(`✅ Membre <@${targetId}> retiré de la famille.`);
+                        return autoDelete(await ui.channel.send({ embeds: [successEmbed(`Membre <@${targetId}> retiré de la famille.`)] }), adminMsgTimeout);
                     }
 
                     const rMenu = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('role').setPlaceholder('Rôle...').addOptions(ROLES_LIST.map(r => ({ label: r, value: r }))));
@@ -770,7 +770,7 @@ client.on('messageCreate', async (message) => {
                             await db.updateFamily(guildId, family.familyName, { members: family.members });
                         }
                         await msg.delete().catch(() => {});
-                        return ri.channel.send(`✅ Rôle **${ri.values[0]}** mis à jour pour <@${targetId}>.`);
+                        return autoDelete(await ri.channel.send({ embeds: [successEmbed(`Rôle **${ri.values[0]}** mis à jour pour <@${targetId}>.`)] }), adminMsgTimeout);
                     } catch (e) {
                         console.error("Erreur sélection rôle admin:", e);
                         await msg.edit({ content: "Action annulée ou temps écoulé pour le choix du rôle.", components: [] }).catch(() => {});
@@ -1219,9 +1219,9 @@ client.on('messageCreate', async (message) => {
             collector.on('collect', async (i) => {
                 if (i.customId === 'confirm_reset') {
                     await db.resetDatabase(guildId);
-                    await autoDelete(await i.update({ content: "✅ La base de données de ce serveur a été entièrement réinitialisée.", embeds: [], components: [] }), 10000); // Supprimer après 10s
+                    await autoDelete(await i.update({ embeds: [successEmbed("La base de données de ce serveur a été entièrement réinitialisée.")], components: [] }), 10000); // Supprimer après 10s
                 } else {
-                    await autoDelete(await i.update({ content: "❌ Action annulée.", embeds: [], components: [] }), 5000); // Supprimer après 5s
+                    await autoDelete(await i.update({ embeds: [errorEmbed("Action annulée.")], components: [] }), 5000); // Supprimer après 5s
                 }
                 collector.stop();
             });
