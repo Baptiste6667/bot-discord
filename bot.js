@@ -57,8 +57,6 @@ const formatMention = (id) => `<@${id}>`;
 const errorEmbed = (text) => new EmbedBuilder().setColor('#ff4757').setDescription(`❌ ${text}`);
 const successEmbed = (text) => new EmbedBuilder().setColor('#2ed573').setDescription(`✅ ${text}`);
 const clearUserFamilyLinks = async (guildId, userId) => await db.clearUserFamilyLinksDB(guildId, userId);
-const safeDelete = (msg) => msg && typeof msg.delete === 'function' ? msg.delete().catch(() => {}) : null;
-const autoDelete = (msg, time = 30000) => setTimeout(() => safeDelete(msg), time);
 
 // --- UnbelievaBoat API Helper ---
 // Configuration de l'instance Axios pour communiquer directement avec l'API v1
@@ -677,19 +675,16 @@ client.on('messageCreate', async (message) => {
             const adminMsgTimeout = 30000; // Suppression après 30 secondes
             try {
                 if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-                    const err = await message.channel.send({ embeds: [errorEmbed("Admin uniquement.")] });
-                    return autoDelete(err, 5000);
+                    return message.channel.send({ embeds: [errorEmbed("Admin uniquement.")] });
                 }
                 const familyName = args.join(' ');
                 if (!familyName) {
-                    const err = await message.channel.send({ embeds: [errorEmbed(`Usage: ${PREFIX}adminfamily <Nom>`)] });
-                    return autoDelete(err, 5000);
+                    return message.channel.send({ embeds: [errorEmbed(`Usage: ${PREFIX}adminfamily <Nom>`)] });
                 }
 
                 const family = await db.getFamily(guildId, familyName);
                 if (!family) {
-                    const err = await message.channel.send({ embeds: [errorEmbed(`Famille "${familyName}" introuvable.`)] });
-                    return autoDelete(err, 5000);
+                    return message.channel.send({ embeds: [errorEmbed(`Famille "${familyName}" introuvable.`)] });
                 }
 
                 const embed = new EmbedBuilder()
@@ -710,12 +705,12 @@ client.on('messageCreate', async (message) => {
                 const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && i.customId === 'admin_action', time: 120000 });
 
                 coll.on('collect', async (i) => {
-                    if (i.values[0] === 'cancel') return safeDelete(msg);
+                    if (i.values[0] === 'cancel') return i.message.delete().catch(() => {});
                     if (i.values[0] === 'clear') {
                     for (const mId of family.members) await db.updateUser(guildId, mId, { familyName: null, spouse: null, children: [], mother: null, father: null });
                     await db.deleteFamily(guildId, familyName);
                     await i.message.delete();
-                    return autoDelete(await i.channel.send({ embeds: [successEmbed(`Famille **${familyName.toUpperCase()}** supprimée.`)] }), adminMsgTimeout);
+                    return i.channel.send({ embeds: [successEmbed(`Famille **${familyName.toUpperCase()}** supprimée.`)] });
                 }
 
                 const action = i.values[0];
@@ -759,9 +754,8 @@ client.on('messageCreate', async (message) => {
 
                     if (action === 'remove') {
                         await db.clearUserFamilyLinksDB(guildId, targetId);
-                        safeDelete(msg);
-                        const res = await ui.channel.send({ embeds: [successEmbed(`Membre <@${targetId}> retiré de la famille.`)] });
-                        return autoDelete(res, adminMsgTimeout);
+                        await msg.delete().catch(() => {});
+                        return ui.channel.send({ embeds: [successEmbed(`Membre <@${targetId}> retiré de la famille.`)] });
                     }
 
                     const rMenu = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('role').setPlaceholder('Rôle...').addOptions(ROLES_LIST.map(r => ({ label: r, value: r }))));
@@ -785,7 +779,7 @@ client.on('messageCreate', async (message) => {
                             await db.updateFamily(guildId, family.familyName, { members: family.members });
                         }
                         await msg.delete().catch(() => {});
-                        return autoDelete(await ri.channel.send({ embeds: [successEmbed(`Rôle **${ri.values[0]}** mis à jour pour <@${targetId}>.`)] }), adminMsgTimeout);
+                        return ri.channel.send({ embeds: [successEmbed(`Rôle **${ri.values[0]}** mis à jour pour <@${targetId}>.`)] });
                     } catch (e) {
                         console.error("Erreur sélection rôle admin:", e);
                         await msg.edit({ content: "Action annulée ou temps écoulé pour le choix du rôle.", components: [] }).catch(() => {});
@@ -794,8 +788,8 @@ client.on('messageCreate', async (message) => {
                     console.error("Erreur sélection membre admin:", e);
                     if (msg) await msg.edit({ embeds: [errorEmbed("Action annulée ou temps écoulé.")], components: [] }).catch(() => {});
                 }
-            });
-                coll.on('end', () => safeDelete(msg));
+            }); // Fin coll.on('collect')
+                coll.on('end', () => msg.delete().catch(() => {})); // Suppression du message admin à la fin du collecteur
             } catch (err) {
                 console.error("Erreur adminfamily:", err);
                 message.channel.send({ embeds: [errorEmbed("Une erreur critique est survenue dans la commande admin.")] });
@@ -865,8 +859,7 @@ client.on('messageCreate', async (message) => {
                         .setTimestamp();
 
                     const sentFam = await message.channel.send({ embeds: [embed], files: [attachment] });
-                    // On supprime la réponse family après 60 secondes pour garder le salon propre (sauf si c'est une consultation directe)
-                    return autoDelete(sentFam, 60000);
+                    return; // Ne pas supprimer
                 }
 
                 embed.setTitle("🏠 Gestion de Famille");
@@ -916,7 +909,7 @@ client.on('messageCreate', async (message) => {
                 collector.on('collect', async (i) => {
                     if (i.customId === 'cancel_main' || (i.isStringSelectMenu() && i.values?.[0] === 'cancel')) {
                         await i.deferUpdate();
-                        return safeDelete(msg);
+                        return msg.delete().catch(() => {});
                     }
 
                     if (i.customId === 'view_branch' || i.customId === 'view_global') {
@@ -974,14 +967,14 @@ client.on('messageCreate', async (message) => {
                             await db.updateUser(guildId, mId, { familyName: null, spouse: null, children: [], mother: null, father: null, customLinks: {} });
                         }
                         await db.deleteFamily(guildId, family.familyName);
-                        safeDelete(msg);
+                        await msg.delete().catch(() => {});
                         return i.channel.send({ embeds: [successEmbed(`La famille **${family.familyName.toUpperCase()}** a été dissoute.`)] });
                     }
                 }
 
                 if (action === 'leave') {
                     await clearUserFamilyLinks(guildId, authorId);
-                    safeDelete(msg);
+                    await msg.delete().catch(() => {});
                     return i.channel.send(`👋 ${message.author} a quitté sa famille.`);
                 }
 
@@ -1017,12 +1010,12 @@ client.on('messageCreate', async (message) => {
                     const targetUser = client.users.cache.get(targetId) || await client.users.fetch(targetId).catch(() => null);
 
                     if (!targetUser) {
-                        await autoDelete(await ui.followUp({ content: "❌ Impossible de trouver cet utilisateur.", flags: MessageFlags.Ephemeral }), adminMsgTimeout);
+                        await ui.followUp({ content: "❌ Impossible de trouver cet utilisateur.", flags: MessageFlags.Ephemeral });
                         return msg.delete();
                     }
 
                     if (action === 'add' && (targetData.familyName === authorData.familyName || targetId === authorId)) {
-                        await autoDelete(await ui.followUp({ content: "❌ Cet utilisateur fait déjà partie de votre famille ou c'est vous-même.", flags: MessageFlags.Ephemeral }), adminMsgTimeout);
+                        await ui.followUp({ content: "❌ Cet utilisateur fait déjà partie de votre famille ou c'est vous-même.", flags: MessageFlags.Ephemeral });
                         return msg.delete();
                     }
                     if ((action === 'remove' || action === 'modify') && targetData.familyName !== authorData.familyName) {
@@ -1048,21 +1041,21 @@ client.on('messageCreate', async (message) => {
                     else await startFamilyVote(guildId, ri, message.author, targetUser, ri.values[0], 'modify'); // L'interaction `ri` est passée au vote
                 } catch (e) {
                     console.error("Erreur family (membre/rôle):", e);
-                    if (msg) await msg.edit({ embeds: [errorEmbed("Action annulée ou temps écoulé.")], components: [] }).catch(() => {});
+                    if (msg) await msg.edit({ embeds: [errorEmbed("Action annulée ou temps écoulé.")], components: [] }).catch(() => {}); // Le message sera supprimé par le collector.on('end')
                 }
             });
-                // Suppression automatique du menu à la fin (temps écoulé ou fermeture)
-                collector.on('end', (collected, reason) => { if (msg) safeDelete(msg); });
+                // Suppression automatique du menu à la fin (temps écoulé ou fermeture manuelle)
+                collector.on('end', (collected, reason) => { if (msg) msg.delete().catch(() => {}); });
             } catch (err) {
                 console.error("Erreur commande family (dashboard):", err);
-                return message.channel.send({ embeds: [errorEmbed("Une erreur est survenue lors de l'affichage de la famille.")] });
+                return message.channel.send({ embeds: [errorEmbed("Une erreur est survenue lors de l'affichage de la famille.")] }); // Le message d'erreur reste
             }
             return;
         }
 
         case 'familytop':
         case 'account': {
-            await message.channel.sendTyping();
+            await message.channel.sendTyping(); // Ces commandes sont persistantes
             const showWealth = async (guildId, uId, uData) => {
                 const members = [uId];
                 if (uData.spouse) members.push(uData.spouse);
@@ -1093,7 +1086,7 @@ client.on('messageCreate', async (message) => {
                 new ButtonBuilder().setCustomId('v_top').setLabel('🏆 Classement').setStyle(ButtonStyle.Primary),
                 new ButtonBuilder().setCustomId('cancel_bank').setLabel('❌').setStyle(ButtonStyle.Secondary)
             );
-            const msg = await message.reply({ embeds: [initialEmbed], components: [row] });
+            const msg = await message.reply({ embeds: [initialEmbed], components: [row] }); // La réponse reste
             const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
             coll.on('collect', async (i) => {
                 if (i.customId === 'cancel_bank') return i.message.delete();
@@ -1117,7 +1110,7 @@ client.on('messageCreate', async (message) => {
                     { name: '💍 Interactions', value: `\`${PREFIX}marry <@User>\` : Mariage.\n\`${PREFIX}divorce\`, \`${PREFIX}hug\`, \`${PREFIX}kiss\`, \`${PREFIX}pat\`, \`${PREFIX}slap\`, \`${PREFIX}tickle\`, \`${PREFIX}dance\`, \`${PREFIX}cuddle\`, \`${PREFIX}bite\`, \`${PREFIX}highfive\`, \`${PREFIX}handhold\`` },
                     { name: '⚙️ Administration', value: `\`${PREFIX}adminfamily <Nom>\` : Outils de gestion forcée.\n\`${PREFIX}resetdb\` : Réinitialisation complète des données du serveur (Admin uniquement).` }
                 );
-            return message.channel.send({ embeds: [h] });
+            return message.channel.send({ embeds: [h] }); // La réponse reste
         }
 
         case 'marry': {
@@ -1141,7 +1134,7 @@ client.on('messageCreate', async (message) => {
                 new ButtonBuilder().setCustomId('m_decline').setLabel('Refuser').setStyle(ButtonStyle.Danger)
             );
 
-            const msg = await message.reply({ content: `${formatMention(target.id)}`, embeds: [marryEmbed], components: [row] });
+            const msg = await message.channel.send({ content: `${formatMention(target.id)}`, embeds: [marryEmbed], components: [row] }); // La réponse reste
             const collector = msg.createMessageComponentCollector({
                 filter: i => i.user.id === target.id,
                 componentType: ComponentType.Button,
@@ -1227,15 +1220,14 @@ client.on('messageCreate', async (message) => {
 
         case 'stop': {
             if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) return;
-            await message.reply("Arrêt du bot...");
+            await message.channel.send("Arrêt du bot...");
             process.exit(0);
         }
 
         case 'resetdb': {
             try {
                 if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-                    const res = await message.channel.send({ embeds: [errorEmbed("Seuls les administrateurs peuvent réinitialiser la base de données.")] });
-                    return autoDelete(res, 10000);
+                    return message.channel.send({ embeds: [errorEmbed("Seuls les administrateurs peuvent réinitialiser la base de données.")] });
                 }
 
                 const resetEmbed = new EmbedBuilder()
@@ -1248,7 +1240,7 @@ client.on('messageCreate', async (message) => {
                 new ButtonBuilder().setCustomId('cancel_reset').setLabel('Annuler').setStyle(ButtonStyle.Secondary)
             );
 
-            const msg = await message.channel.send({ embeds: [resetEmbed], components: [resetRow] });
+            const msg = await message.channel.send({ embeds: [resetEmbed], components: [resetRow] }); // La réponse reste
             const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
 
             collector.on('collect', async (i) => {
@@ -1258,11 +1250,10 @@ client.on('messageCreate', async (message) => {
                 } else {
                     await i.update({ embeds: [errorEmbed("Action annulée.")], components: [] });
                 }
-                autoDelete(msg, 5000);
                 collector.stop();
             });
 
-            collector.on('end', (collected, reason) => { if (reason === 'time') safeDelete(msg); });
+            collector.on('end', (collected, reason) => { if (reason === 'time') msg.delete().catch(() => {}); });
             } catch (err) {
                 console.error("Erreur resetdb:", err);
             }
@@ -1270,12 +1261,12 @@ client.on('messageCreate', async (message) => {
         }
 
         case 'listfamilies': {
-            try { // Cette commande ne sera pas auto-supprimée
+            try {
                 const families = await db.getAllFamilies(guildId);
                 const familyList = Object.values(families);
 
                 if (familyList.length === 0) {
-                    return message.reply({ embeds: [errorEmbed("Aucune famille n'a encore été créée sur ce serveur.")] });
+                    return message.channel.send({ embeds: [errorEmbed("Aucune famille n'a encore été créée sur ce serveur.")] });
                 }
 
                 // Tri alphabétique par nom
@@ -1296,11 +1287,10 @@ client.on('messageCreate', async (message) => {
 
                 embed.setDescription(`${embed.data.description}\n\n${listText.length > 4000 ? listText.substring(0, 3997) + '...' : listText}`);
 
-                const sentList = await message.channel.send({ embeds: [embed] });
-                return autoDelete(sentList, 60000);
+                return message.channel.send({ embeds: [embed] });
             } catch (err) {
                 console.error("Erreur listfamilies:", err);
-                return message.reply({ embeds: [errorEmbed("Impossible de récupérer la liste des familles.")] });
+                return message.channel.send({ embeds: [errorEmbed("Impossible de récupérer la liste des familles.")] });
             }
         }
 
@@ -1338,7 +1328,7 @@ client.on('messageCreate', async (message) => {
             coll.on('collect', async (i) => {
                 if (i.customId === 'cancel_info') {
                     await i.deferUpdate();
-                    return safeDelete(msg);
+                    return msg.delete().catch(() => {});
                 }
                 if (i.customId === 'edit_p') {
                     const menu = new StringSelectMenuBuilder().setCustomId('p_field').setPlaceholder('Modifier...')
@@ -1377,7 +1367,7 @@ client.on('messageCreate', async (message) => {
                     return i.update({ content: "💍 Nom adopté !", components: [] }); // La réponse est persistante
                 }
             });
-            coll.on('end', () => { if (msg) autoDelete(msg, 30000); });
+            coll.on('end', () => { if (msg) msg.delete().catch(() => {}); });
             return;
         }
 
