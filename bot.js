@@ -669,14 +669,15 @@ client.on('messageCreate', async (message) => {
 
     switch (command) {
         case 'adminfamily': {
-            if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) return message.reply("❌ Admin uniquement.");
-            const familyName = args.join(' ');
-            if (!familyName) return message.reply(`Usage: ${PREFIX}adminfamily <Nom de la famille>`);
+            try {
+                if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) return message.reply("❌ Admin uniquement.");
+                const familyName = args.join(' ');
+                if (!familyName) return message.reply(`Usage: ${PREFIX}adminfamily <Nom de la famille>`);
 
-            const family = await db.getFamily(guildId, familyName);
-            if (!family) return message.reply(`❌ Famille "${familyName}" introuvable.`);
+                const family = await db.getFamily(guildId, familyName);
+                if (!family) return message.reply(`❌ Famille "${familyName}" introuvable.`);
 
-            const embed = new EmbedBuilder()
+                const embed = new EmbedBuilder()
                 .setTitle(`🛠️ Admin : Famille ${familyName.toUpperCase()}`)
                 .setColor("#e74c3c")
                 .setDescription("Sélectionnez une action administrative.");
@@ -690,12 +691,12 @@ client.on('messageCreate', async (message) => {
             ];
             const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('admin_action').setPlaceholder('Action...').addOptions(options));
 
-            const msg = await message.reply({ embeds: [embed], components: [row] });
-            const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && i.customId === 'admin_action', time: 120000 });
+                const msg = await message.reply({ embeds: [embed], components: [row] });
+                const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && i.customId === 'admin_action', time: 120000 });
 
-            coll.on('collect', async (i) => {
-                if (i.values[0] === 'cancel') return i.message.delete();
-                if (i.values[0] === 'clear') {
+                coll.on('collect', async (i) => {
+                    if (i.values[0] === 'cancel') return i.message.delete();
+                    if (i.values[0] === 'clear') {
                     for (const mId of family.members) await db.updateUser(guildId, mId, { familyName: null, spouse: null, children: [], mother: null, father: null });
                     await db.deleteFamily(guildId, familyName);
                     await i.message.delete();
@@ -732,11 +733,11 @@ client.on('messageCreate', async (message) => {
                     const targetId = ui.values[0];
                     const targetData = await db.getOrCreateUser(guildId, targetId);
 
-                    if (action === 'add' && targetData.familyName === family._id) {
+                    if (action === 'add' && targetData.familyName === family.familyName) {
                         await ui.followUp({ content: "❌ Cet utilisateur est déjà dans cette famille.", flags: MessageFlags.Ephemeral });
                         return msg.delete();
                     }
-                    if ((action === 'remove' || action === 'modify') && targetData.familyName !== family._id) {
+                    if ((action === 'remove' || action === 'modify') && targetData.familyName !== family.familyName) {
                         await ui.followUp({ content: "❌ Cet utilisateur n'est pas dans cette famille.", flags: MessageFlags.Ephemeral });
                         return msg.delete();
                     }
@@ -778,20 +779,24 @@ client.on('messageCreate', async (message) => {
                     await msg.edit({ content: "Action annulée ou temps écoulé pour la sélection du membre.", components: [] }).catch(() => {});
                 }
             });
-            coll.on('end', () => msg.edit({ components: [] }).catch(() => {}));
+                coll.on('end', () => msg.edit({ components: [] }).catch(() => {}));
+            } catch (err) {
+                console.error("Erreur adminfamily:", err);
+                message.reply({ embeds: [errorEmbed("Une erreur critique est survenue dans la commande admin.")] });
+            }
             return;
         }
 
         case 'family': {
+            let embed = new EmbedBuilder().setColor("#5865F2");
+            let rows = [];
             try {
-                let embed;
-                let rows = [];
                 const isGlobalArg = args.some(a => ['global', 'lignée', 'toute'].includes(a.toLowerCase()));
                 const searchArgs = args.filter(a => !['global', 'lignée', 'toute'].includes(a.toLowerCase()));
 
                 if (searchArgs.length > 0) {
                     await message.channel.sendTyping();
-                    
+
                     let targetId = message.mentions.users.first()?.id;
                     // Support de l'ID direct
                     if (!targetId && searchArgs[0]?.match(/^\d{17,19}$/)) targetId = searchArgs[0];
@@ -846,49 +851,54 @@ client.on('messageCreate', async (message) => {
                     return message.reply({ embeds: [embed], files: [attachment] });
                 }
 
-                embed = new EmbedBuilder().setTitle("🏠 Gestion de Famille").setColor("#5865F2");
-                // ... reste du code original ...
-            } catch (err) {
-                console.error("Erreur commande family:", err);
-                return message.reply({ embeds: [errorEmbed("Une erreur est survenue lors de la génération de l'arbre. Vérifiez les données de la famille.")] });
-            }
+                embed.setTitle("🏠 Gestion de Famille");
 
-            if (!authorData.familyName) {
-                embed.setDescription("Vous ne possédez pas de famille. Souhaitez-vous fonder votre propre lignée ?");
-                rows.push(new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId('create_fam').setLabel('Fonder une lignée').setStyle(ButtonStyle.Success),
-                    new ButtonBuilder().setCustomId('cancel_main').setLabel('Annuler').setStyle(ButtonStyle.Secondary)
-                ));
-            } else {
-                const family = await db.getFamily(guildId, authorData.familyName);
-                const isHead = family.head === authorId;
-                embed.setDescription(`Dynastie : **${authorData.familyName.toUpperCase()}**\nRang : ${isHead ? "Chef" : "Membre"}`);
-                
-                rows.push(new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId('view_branch').setLabel('Ma Branche').setStyle(ButtonStyle.Primary),
-                    new ButtonBuilder().setCustomId('view_global').setLabel('Lignée Complète').setStyle(ButtonStyle.Success)
-                ));
+                if (!authorData.familyName) {
+                    embed.setDescription("Vous ne possédez pas de famille. Souhaitez-vous fonder votre propre lignée ?");
+                    rows.push(new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId('create_fam').setLabel('Fonder une lignée').setStyle(ButtonStyle.Success),
+                        new ButtonBuilder().setCustomId('cancel_main').setLabel('Annuler').setStyle(ButtonStyle.Secondary)
+                    ));
+                } else {
+                    const family = await db.getFamily(guildId, authorData.familyName);
+                    if (!family) {
+                        // Nettoyage automatique si la famille a disparu de la DB
+                        await db.updateUser(guildId, authorId, { familyName: null });
+                        embed.setDescription("Votre ancienne lignée n'existe plus. Souhaitez-vous en fonder une nouvelle ?");
+                        rows.push(new ActionRowBuilder().addComponents(
+                            new ButtonBuilder().setCustomId('create_fam').setLabel('Fonder une lignée').setStyle(ButtonStyle.Success),
+                            new ButtonBuilder().setCustomId('cancel_main').setLabel('Annuler').setStyle(ButtonStyle.Secondary)
+                        ));
+                    } else {
+                        const isHead = family.head === authorId;
+                        embed.setDescription(`Dynastie : **${authorData.familyName.toUpperCase()}**\nRang : ${isHead ? "Chef" : "Membre"}`);
 
-                const menu = new StringSelectMenuBuilder().setCustomId('fam_action').setPlaceholder('Gérer...')
-                    .addOptions([
-                        { label: 'Ajouter un membre', value: 'add' },
-                        { label: 'Modifier un rôle', value: 'modify' },
-                        { label: 'Enlever un membre', value: 'remove' },
-                        { label: 'Quitter la famille', value: 'leave' }
-                    ]);
-                if (isHead) menu.addOptions({ label: 'Dissoudre la famille', value: 'delete' });
-                menu.addOptions({ label: 'Annuler', value: 'cancel' });
-                rows.push(new ActionRowBuilder().addComponents(menu));
-                rows.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('cancel_main').setLabel('Fermer').setStyle(ButtonStyle.Secondary)));
-            }
+                        rows.push(new ActionRowBuilder().addComponents(
+                            new ButtonBuilder().setCustomId('view_branch').setLabel('Ma Branche').setStyle(ButtonStyle.Primary),
+                            new ButtonBuilder().setCustomId('view_global').setLabel('Lignée Complète').setStyle(ButtonStyle.Success)
+                        ));
 
-            const msg = await message.reply({ embeds: [embed], components: rows });
-            const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['fam_action', 'create_fam', 'cancel_main', 'view_branch', 'view_global'].includes(i.customId), time: 120000 });
+                        const menu = new StringSelectMenuBuilder().setCustomId('fam_action').setPlaceholder('Gérer...')
+                            .addOptions([
+                                { label: 'Ajouter un membre', value: 'add' },
+                                { label: 'Modifier un rôle', value: 'modify' },
+                                { label: 'Enlever un membre', value: 'remove' },
+                                { label: 'Quitter la famille', value: 'leave' }
+                            ]);
+                        if (isHead) menu.addOptions({ label: 'Dissoudre la famille', value: 'delete' });
+                        menu.addOptions({ label: 'Annuler', value: 'cancel' });
+                        rows.push(new ActionRowBuilder().addComponents(menu));
+                        rows.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('cancel_main').setLabel('Fermer').setStyle(ButtonStyle.Secondary)));
+                    }
+                }
 
-            collector.on('collect', async (i) => {
-                if (i.customId === 'cancel_main' || i.values?.[0] === 'cancel') return i.message.delete();
-                
-                if (i.customId === 'view_branch' || i.customId === 'view_global') {
+                const msg = await message.reply({ embeds: [embed], components: rows });
+                const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['fam_action', 'create_fam', 'cancel_main', 'view_branch', 'view_global'].includes(i.customId), time: 120000 });
+
+                collector.on('collect', async (i) => {
+                    if (i.customId === 'cancel_main' || i.values?.[0] === 'cancel') return i.message.delete();
+
+                    if (i.customId === 'view_branch' || i.customId === 'view_global') {
                     await i.deferUpdate();
                     const family = await db.getFamily(guildId, authorData.familyName);
                     const targetId = i.customId === 'view_global' ? family.head : authorId;
@@ -1007,7 +1017,11 @@ client.on('messageCreate', async (message) => {
                     await msg.edit({ content: "Action annulée ou temps écoulé.", components: [] }).catch(() => {});
                 }
             });
-            collector.on('end', () => msg.edit({ components: [] }).catch(() => {}));
+                collector.on('end', () => msg.edit({ components: [] }).catch(() => {}));
+            } catch (err) {
+                console.error("Erreur commande family:", err);
+                return message.reply({ embeds: [errorEmbed("Une erreur est survenue lors de l'affichage de la famille.")] });
+            }
             return;
         }
 
