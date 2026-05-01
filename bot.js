@@ -655,11 +655,11 @@ client.on('messageCreate', async (message) => {
     const authorData = await db.getOrCreateUser(guildId, authorId);
     
     // On définit les commandes dont on veut garder la trace (social et info)
-    const persistentCommands = ['family', 'info', 'listfamilies', 'familytop', 'account', 'marry', 'divorce', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold']; // Ces commandes ne verront pas leur réponse supprimée
-    
-    // On ne supprime le message que si ce n'est pas une commande persistante
-    if (!persistentCommands.includes(command)) message.delete().catch(() => {});
+    const persistentCommands = ['help', 'account', 'familytop', 'marry', 'divorce', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold', 'info', 'listfamilies'];
 
+    // Fonction de suppression sécurisée
+    const safeDelete = (msg) => msg && typeof msg.delete === 'function' ? msg.delete().catch(() => {}) : null;
+    
     const target = message.mentions.users.first();
     const commandsToType = ['adminfamily', 'family', 'account', 'info'];
     if (commandsToType.includes(command)) await message.channel.sendTyping();
@@ -669,14 +669,16 @@ client.on('messageCreate', async (message) => {
 
     switch (command) {
         case 'adminfamily': {
+            // Suppression du message de commande après un léger délai pour éviter les erreurs de reply
+            setTimeout(() => message.delete().catch(() => {}), 1000);
             const adminMsgTimeout = 30000; // Suppression après 30 secondes
             try {
-                if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) return autoDelete(await message.reply("❌ Admin uniquement."), adminMsgTimeout);
+                if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) return autoDelete(await message.reply({ embeds: [errorEmbed("Admin uniquement.")] }), adminMsgTimeout);
                 const familyName = args.join(' ');
-                if (!familyName) return autoDelete(await message.reply(`Usage: ${PREFIX}adminfamily <Nom de la famille>`), adminMsgTimeout);
+                if (!familyName) return autoDelete(await message.reply({ embeds: [errorEmbed(`Usage: ${PREFIX}adminfamily <Nom>`)] }), adminMsgTimeout);
 
                 const family = await db.getFamily(guildId, familyName);
-                if (!family) return autoDelete(await message.reply(`❌ Famille "${familyName}" introuvable.`), adminMsgTimeout);
+                if (!family) return autoDelete(await message.reply({ embeds: [errorEmbed(`Famille "${familyName}" introuvable.`)] }), adminMsgTimeout);
 
                 const embed = new EmbedBuilder()
                 .setTitle(`🛠️ Admin : Famille ${familyName.toUpperCase()}`)
@@ -777,10 +779,10 @@ client.on('messageCreate', async (message) => {
                     }
                 } catch (e) {
                     console.error("Erreur sélection membre admin:", e);
-                    await msg.edit({ content: "Action annulée ou temps écoulé pour la sélection du membre.", components: [] }).catch(() => {}); // Ce message sera supprimé par le collector.on('end')
+                    await msg.edit({ embeds: [errorEmbed("Action annulée ou temps écoulé.")], components: [] }).catch(() => {});
                 }
             });
-                coll.on('end', () => msg.edit({ components: [] }).catch(() => {}));
+                coll.on('end', () => msg.delete().catch(() => {}));
             } catch (err) {
                 console.error("Erreur adminfamily:", err);
                 message.reply({ embeds: [errorEmbed("Une erreur critique est survenue dans la commande admin.")] });
@@ -789,6 +791,7 @@ client.on('messageCreate', async (message) => {
         }
 
         case 'family': {
+            if (!persistentCommands.includes(command)) setTimeout(() => message.delete().catch(() => {}), 1000);
             let embed = new EmbedBuilder().setColor("#5865F2");
             let rows = [];
             try {
@@ -1015,10 +1018,10 @@ client.on('messageCreate', async (message) => {
                     else await startFamilyVote(guildId, ri, message.author, targetUser, ri.values[0], 'modify'); // L'interaction `ri` est passée au vote
                 } catch (e) {
                     console.error("Erreur family (membre/rôle):", e);
-                    await msg.edit({ content: "Action annulée ou temps écoulé.", components: [] }).catch(() => {});
+                    if (msg) await msg.edit({ embeds: [errorEmbed("Action annulée ou temps écoulé.")], components: [] }).catch(() => {});
                 }
             });
-                collector.on('end', () => msg.edit({ components: [] }).catch(() => {}));
+                collector.on('end', () => { if (msg) msg.delete().catch(() => {}); });
             } catch (err) {
                 console.error("Erreur commande family (dashboard):", err);
                 return message.reply({ embeds: [errorEmbed("Une erreur est survenue lors de l'affichage de la famille.")] });
@@ -1199,11 +1202,13 @@ client.on('messageCreate', async (message) => {
         }
 
         case 'resetdb': {
-            if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-                return message.reply({ embeds: [errorEmbed("Seuls les administrateurs peuvent réinitialiser la base de données.")] });
-            }
+            setTimeout(() => message.delete().catch(() => {}), 1000);
+            try {
+                if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                    return autoDelete(await message.reply({ embeds: [errorEmbed("Seuls les administrateurs peuvent réinitialiser la base de données.")] }), 10000);
+                }
 
-            const resetEmbed = new EmbedBuilder()
+                const resetEmbed = new EmbedBuilder()
                 .setTitle("⚠️ Réinitialisation de la Base de Données")
                 .setColor("#ff4757")
                 .setDescription("Êtes-vous sûr de vouloir supprimer **toutes les données** (utilisateurs et familles) ?\nCette action est irréversible.");
@@ -1219,16 +1224,21 @@ client.on('messageCreate', async (message) => {
             collector.on('collect', async (i) => {
                 if (i.customId === 'confirm_reset') {
                     await db.resetDatabase(guildId);
-                    await autoDelete(await i.update({ embeds: [successEmbed("La base de données de ce serveur a été entièrement réinitialisée.")], components: [] }), 10000); // Supprimer après 10s
+                    await i.update({ embeds: [successEmbed("La base de données de ce serveur a été entièrement réinitialisée.")], components: [] });
+                    autoDelete(msg, 10000);
                 } else {
-                    await autoDelete(await i.update({ embeds: [errorEmbed("Action annulée.")], components: [] }), 5000); // Supprimer après 5s
+                    await i.update({ embeds: [errorEmbed("Action annulée.")], components: [] });
+                    autoDelete(msg, 5000);
                 }
                 collector.stop();
             });
 
             collector.on('end', (collected, reason) => {
-                if (reason === 'time' && collected.size === 0) msg.edit({ components: [] }).catch(() => {});
+                if (reason === 'time' && collected.size === 0) msg.delete().catch(() => {});
             });
+            } catch (err) {
+                console.error("Erreur resetdb:", err);
+            }
             return;
         }
 
