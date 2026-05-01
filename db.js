@@ -45,6 +45,11 @@ async function getOrCreateUser(userId) {
   return user;
 }
 
+async function getUsersByIds(userIds) {
+  const users = await usersCollection.find({ _id: { $in: userIds } }).toArray();
+  return users;
+}
+
 async function updateUser(userId, updateFields) {
   await usersCollection.updateOne({ _id: userId }, { $set: updateFields });
 }
@@ -96,16 +101,16 @@ async function clearUserFamilyLinksDB(userId) {
         if (family.members.length === 0) {
           await deleteFamily(family._id);
         } else {
-            // Logique de succession : on cherche les membres sans parents dans la famille (les plus "vieux")
-            const results = await Promise.all(family.members.map(async mId => {
-                const mData = await getOrCreateUser(mId);
-                const hasParentInFamily = (mData.mother && family.members.includes(mData.mother)) || 
-                                          (mData.father && family.members.includes(mData.father));
-                return { mId, isPotential: !hasParentInFamily };
-            }));
+            // Logique de succession optimisée
+            const membersData = await getUsersByIds(family.members);
+            const potentialHeads = membersData
+                .filter(mData => {
+                    const hasParentInFamily = (mData.mother && family.members.includes(mData.mother)) || 
+                                              (mData.father && family.members.includes(mData.father));
+                    return !hasParentInFamily;
+                })
+                .map(mData => mData._id);
             
-            const potentialHeads = results.filter(r => r.isPotential).map(r => r.mId);
-
             if (potentialHeads.length > 0) {
                 family.head = potentialHeads[Math.floor(Math.random() * potentialHeads.length)];
             } else {
@@ -125,6 +130,7 @@ async function clearUserFamilyLinksDB(userId) {
 module.exports = {
   connectDB,
   getOrCreateUser,
+  getUsersByIds,
   updateUser,
   getAllUsers,
   getFamily,
