@@ -94,6 +94,7 @@ async function updateUBBalance(guildId, userId, cashDelta) {
 
 // --- Visual Tree Generator ---
 async function generateFamilyImage(client, userId) {
+    console.log(`[DEBUG] Début génération image pour : ${userId}`);
     const canvas = createCanvas(800, 550);
     const ctx = canvas.getContext('2d');
     const userData = await db.getOrCreateUser(userId); // Fetch user data from DB
@@ -124,6 +125,7 @@ async function generateFamilyImage(client, userId) {
 
     const drawNode = async (id, x, y, roleText, color = '#7289da') => {
         if (!id) return;
+        console.log(`[DEBUG] Dessin du nœud ${id} (${roleText}) à x:${x}, y:${y}`);
         
         const user = client.users.cache.get(id) || (typeof id === 'string' ? await client.users.fetch(id).catch(() => null) : null);
         const name = (user ? user.username : id)?.toString() || "Inconnu";
@@ -133,8 +135,10 @@ async function generateFamilyImage(client, userId) {
         fillRoundedRect(x - 90, y - 35, 180, 70, 15, isHead ? '#faa61a' : color);
 
         if (user) {
+            const avatarUrl = user.displayAvatarURL({ extension: 'png', size: 128 });
             try {
-                const avatar = await loadImage(user.displayAvatarURL({ extension: 'png', size: 128 }));
+                console.log(`[DEBUG] Chargement avatar pour ${user.username}: ${avatarUrl}`);
+                const avatar = await loadImage(avatarUrl);
                 ctx.save();
                 ctx.beginPath();
                 ctx.arc(x - 50, y, 25, 0, Math.PI * 2);
@@ -153,12 +157,14 @@ async function generateFamilyImage(client, userId) {
                 ctx.fillStyle = '#ffffff';
                 ctx.fillText((isHead ? "👑 " : "") + roleText, x - 15, y + 15);
             } catch (err) {
+                console.error(`[DEBUG] Erreur chargement avatar/texte pour ${user.username}:`, err.message);
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'center';
                 ctx.font = '16px FamilyTreeFont';
                 ctx.fillText(name.substring(0, 15), x, y);
             }
         } else {
+            console.log(`[DEBUG] Utilisateur ${id} non trouvé dans le cache/fetch.`);
             ctx.fillStyle = '#ffffff';
             ctx.textAlign = 'center';
             ctx.font = '16px FamilyTreeFont';
@@ -170,6 +176,7 @@ async function generateFamilyImage(client, userId) {
     
     // Dessin du Titre
     if (family) {
+        console.log(`[DEBUG] Dessin du titre pour la famille ${family._id}`);
         ctx.save();
         ctx.fillStyle = '#ffffff';
         ctx.font = '26px FamilyTreeFont';
@@ -199,18 +206,21 @@ async function generateFamilyImage(client, userId) {
     }
 
     // ÉTAPE 2 : Dessiner tous les nœuds par-dessus
+    console.log("[DEBUG] Dessin des membres...");
     if (userData.spouse) await drawNode(userData.spouse, centerX + 200, centerY, "Conjoint(e)");
     for (let i = 0; i < parents.length; i++) {
         const xPos = centerX - 130 + (i * 260);
         await drawNode(parents[i], xPos, 130, parents[i] === userData.father ? "Père" : "Mère");
     }
-    for (let i = 0; i < children.length; i++) {
+    const childrenData = (userData.children || []).slice(0, 5);
+    for (let i = 0; i < childrenData.length; i++) {
         const xPos = centerX + (i - (children.length - 1) / 2) * (children.length > 1 ? 740 / (children.length - 1) : 0);
-        await drawNode(children[i], xPos, 430, "Enfant");
+        await drawNode(childrenData[i], xPos, 430, "Enfant");
     }
     
     await drawNode(userId, centerX, centerY, "Moi", '#5865F2');
 
+    console.log("[DEBUG] Image générée avec succès, conversion en buffer...");
     return canvas.toBuffer();
 }
 
