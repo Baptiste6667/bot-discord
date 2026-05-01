@@ -655,7 +655,7 @@ client.on('messageCreate', async (message) => {
     const authorData = await db.getOrCreateUser(guildId, authorId);
     
     // On définit les commandes dont on veut garder la trace (social et info)
-    // Seuls help, account et les interactions sociales restent. family, admin, info et listfamilies seront supprimés.
+    // Seuls help, account, familytop et les interactions sociales restent affichés.
     const persistentCommands = ['help', 'account', 'familytop', 'marry', 'divorce', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold'];
 
     // Fonction de suppression sécurisée
@@ -913,7 +913,7 @@ client.on('messageCreate', async (message) => {
                 const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['fam_action', 'create_fam', 'cancel_main', 'view_branch', 'view_global'].includes(i.customId), time: 120000 });
                 
                 collector.on('collect', async (i) => {
-                    if (i.customId === 'cancel_main' || i.values?.[0] === 'cancel') {
+                    if (i.customId === 'cancel_main' || (i.isStringSelect() && i.values?.[0] === 'cancel')) {
                         await i.deferUpdate();
                         return safeDelete(msg);
                     }
@@ -1050,8 +1050,8 @@ client.on('messageCreate', async (message) => {
                     if (msg) await msg.edit({ embeds: [errorEmbed("Action annulée ou temps écoulé.")], components: [] }).catch(() => {});
                 }
             });
-                // Suppression du dashboard à l'expiration
-                collector.on('end', (collected, reason) => { if (reason === 'time') safeDelete(msg); });
+                // Suppression automatique du menu à la fin (temps écoulé ou fermeture)
+                collector.on('end', (collected, reason) => { if (msg) safeDelete(msg); });
             } catch (err) {
                 console.error("Erreur commande family (dashboard):", err);
                 return message.channel.send({ embeds: [errorEmbed("Une erreur est survenue lors de l'affichage de la famille.")] });
@@ -1282,7 +1282,8 @@ client.on('messageCreate', async (message) => {
                 // Tri alphabétique par nom
                 familyList.sort((a, b) => a.familyName.localeCompare(b.familyName));
 
-                const embed = new EmbedBuilder()
+                const embed = new EmbedBuilder();
+                embed
                     .setTitle(`🏰 Dynasties de ${message.guild.name}`)
                     .setColor('#5865F2')
                     .setThumbnail(message.guild.iconURL())
@@ -1296,7 +1297,8 @@ client.on('messageCreate', async (message) => {
 
                 embed.setDescription(`${embed.data.description}\n\n${listText.length > 4000 ? listText.substring(0, 3997) + '...' : listText}`);
 
-                return message.reply({ embeds: [embed] });
+                const sentList = await message.reply({ embeds: [embed] });
+                return autoDelete(sentList, 60000);
             } catch (err) {
                 console.error("Erreur listfamilies:", err);
                 return message.reply({ embeds: [errorEmbed("Impossible de récupérer la liste des familles.")] });
@@ -1327,12 +1329,18 @@ client.on('messageCreate', async (message) => {
                     { name: '👩 Mère', value: userData.mother ? formatMention(userData.mother) : 'Inconnue', inline: true }
                 );
 
-            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('edit_p').setLabel('⚙️ Personnaliser').setStyle(ButtonStyle.Secondary));
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('edit_p').setLabel('⚙️ Personnaliser').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('cancel_info').setLabel('Fermer').setStyle(ButtonStyle.Secondary)
+            );
             const msg = await message.reply({ embeds: [buildEmbed()], components: targetUser.id === authorId ? [row] : [] });
-            if (targetUser.id !== authorId) return;
 
-            const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
+            const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['edit_p', 'cancel_info', 'p_field', 'sel_gen'].includes(i.customId), time: 60000 });
             coll.on('collect', async (i) => {
+                if (i.customId === 'cancel_info') {
+                    await i.deferUpdate();
+                    return safeDelete(msg);
+                }
                 if (i.customId === 'edit_p') {
                     const menu = new StringSelectMenuBuilder().setCustomId('p_field').setPlaceholder('Modifier...')
                         .addOptions([
@@ -1370,6 +1378,7 @@ client.on('messageCreate', async (message) => {
                     return i.update({ content: "💍 Nom adopté !", components: [] }); // La réponse est persistante
                 }
             });
+            coll.on('end', () => { if (msg) autoDelete(msg, 30000); });
             return;
         }
 
@@ -1504,23 +1513,33 @@ client.on('interactionCreate', async (interaction) => {
     
     if (interaction.customId === 'modal_create_fam') {
         try {
-            const rawName = interaction.fields.getTextInputValue('fam_name');
-            const name = rawName.trim().toLowerCase();
+            // On diffère la réponse immédiatement pour éviter le timeout de 3 secondes de Discord
+            await interaction.deferReply({ ephemeral: true });
+
+            const nameInput = interaction.fields.getTextInputValue('fam_name').trim();
+            const name = nameInput.toLowerCase();
             console.log(`[DEBUG] Tentative de création famille: "${name}" sur serveur: ${guildId}`);
 
             if (await db.getFamily(guildId, name)) {
-                return interaction.reply({ content: `❌ Le nom "**${name.toUpperCase()}**" est déjà utilisé sur ce serveur.`, flags: MessageFlags.Ephemeral });
+                return interaction.editReply({ content: `❌ Le nom "**${nameInput.toUpperCase()}**" est déjà utilisé sur ce serveur.` });
+            }
+
+            // Sécurité : Vérifier si l'utilisateur n'a pas déjà une famille entre temps
+            const uData = await db.getOrCreateUser(guildId, interaction.user.id);
+            if (uData.familyName) {
+                return interaction.editReply({ content: `❌ Vous possédez déjà une lignée (**${uData.familyName.toUpperCase()}**).` });
             }
 
             await db.createFamily(guildId, name, interaction.user.id);
             await db.updateUser(guildId, interaction.user.id, { familyName: name });
-            
-            const successMsg = await interaction.reply({ embeds: [successEmbed(`Famille **${name.toUpperCase()}** fondée !`) ], fetchReply: true });
-            // Auto-suppression du message de succès après 10 secondes
-            setTimeout(() => successMsg.delete().catch(() => {}), 10000);
+            await interaction.editReply({ embeds: [successEmbed(`Famille **${nameInput.toUpperCase()}** fondée !`)] });
         } catch (err) {
             console.error("Erreur création famille via modal:", err);
-            await interaction.reply({ embeds: [errorEmbed("Une erreur est survenue lors de la création de la famille.")], flags: MessageFlags.Ephemeral });
+            if (interaction.deferred) {
+                await interaction.editReply({ embeds: [errorEmbed("Une erreur est survenue lors de la création de la famille.")] });
+            } else {
+                await interaction.reply({ embeds: [errorEmbed("Une erreur est survenue lors de la création de la famille.")], flags: MessageFlags.Ephemeral });
+            }
         }
     }
 
