@@ -727,7 +727,7 @@ client.on('messageCreate', async (message) => {
                     const filteredMembers = family.members.filter(mId => mId !== family.head);
                     
                     if (filteredMembers.length === 0) {
-                        return autoDelete(await i.reply({ content: "❌ Aucun autre membre à modifier ou retirer.", flags: MessageFlags.Ephemeral }), adminMsgTimeout);
+                        return i.reply({ content: "❌ Aucun autre membre à modifier ou retirer.", flags: MessageFlags.Ephemeral });
                     }
 
                     const memberOptions = await Promise.all(filteredMembers.map(async (mId) => {
@@ -1297,7 +1297,7 @@ client.on('messageCreate', async (message) => {
 
                 embed.setDescription(`${embed.data.description}\n\n${listText.length > 4000 ? listText.substring(0, 3997) + '...' : listText}`);
 
-                const sentList = await message.reply({ embeds: [embed] });
+                const sentList = await message.channel.send({ embeds: [embed] });
                 return autoDelete(sentList, 60000);
             } catch (err) {
                 console.error("Erreur listfamilies:", err);
@@ -1333,7 +1333,7 @@ client.on('messageCreate', async (message) => {
                 new ButtonBuilder().setCustomId('edit_p').setLabel('⚙️ Personnaliser').setStyle(ButtonStyle.Secondary),
                 new ButtonBuilder().setCustomId('cancel_info').setLabel('Fermer').setStyle(ButtonStyle.Secondary)
             );
-            const msg = await message.reply({ embeds: [buildEmbed()], components: targetUser.id === authorId ? [row] : [] });
+            const msg = await message.channel.send({ embeds: [buildEmbed()], components: targetUser.id === authorId ? [row] : [] });
 
             const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['edit_p', 'cancel_info', 'p_field', 'sel_gen'].includes(i.customId), time: 60000 });
             coll.on('collect', async (i) => {
