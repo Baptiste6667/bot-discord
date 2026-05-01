@@ -22,25 +22,21 @@ const {
     InteractionType,
     InteractionResponseType
 } = require('discord.js');
-const fs = require('fs');
-const { createCanvas, loadImage, registerFont } = require('canvas');
+// Remplace l'ancien require('canvas') par celui-ci :
+const { createCanvas, loadImage, GlobalFonts } = require('@napi-rs/canvas');
 const path = require('path');
+const fs = require('fs');
 
-// Attempt to register a generic font for better compatibility
+// Modification de l'enregistrement de la police
 try {
     const fontPath = path.resolve(__dirname, 'font.ttf');
-
     if (fs.existsSync(fontPath)) {
-        // On utilise un nom de famille très explicite
-        registerFont(fontPath, { family: 'MyCustomFont' });
-        console.log(`✅ Police enregistrée (alias: MyCustomFont) depuis : ${fontPath}`);
-    } else {
-        console.warn(`⚠️ Fichier font.ttf introuvable !`);
-        console.log(`🔍 Chemin cherché : ${fontPath}`);
-        console.log("💡 Rappel : Le fichier doit être à la racine de ton GitHub, pas dans un sous-dossier.");
+        // La syntaxe change de registerFont(...) à GlobalFonts.registerFromPath(...)
+        GlobalFonts.registerFromPath(fontPath, 'MyCustomFont');
+        console.log(`✅ Police enregistrée : ${fontPath}`);
     }
 } catch (e) {
-    console.error("❌ Erreur lors de l'initialisation de la police :", e.message);
+    console.error("❌ Erreur police :", e.message);
 }
 
 const axios = require('axios');
