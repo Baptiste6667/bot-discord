@@ -56,7 +56,7 @@ const ROLES_LIST = [
 const formatMention = (id) => `<@${id}>`;
 const errorEmbed = (text) => new EmbedBuilder().setColor('#ff4757').setDescription(`❌ ${text}`);
 const successEmbed = (text) => new EmbedBuilder().setColor('#2ed573').setDescription(`✅ ${text}`);
-const clearUserFamilyLinks = async (userId) => await db.clearUserFamilyLinksDB(userId);
+const clearUserFamilyLinks = async (guildId, userId) => await db.clearUserFamilyLinksDB(guildId, userId);
 
 // --- UnbelievaBoat API Helper ---
 // Configuration de l'instance Axios pour communiquer directement avec l'API v1
@@ -90,13 +90,13 @@ async function updateUBBalance(guildId, userId, cashDelta) {
 }
 
 // --- Visual Tree Generator ---
-async function generateFamilyImage(client, userId) {
+async function generateFamilyImage(client, guildId, userId) {
     console.log(`[DEBUG] Début génération image pour : ${userId}`);
     // Augmenter la taille du canvas si nécessaire pour plus de membres ou un titre plus grand
     const canvas = createCanvas(800, 550);
     const ctx = canvas.getContext('2d');
-    const userData = await db.getOrCreateUser(userId); // Fetch user data from DB
-    const family = userData.familyName ? await db.getFamily(userData.familyName) : null;
+    const userData = await db.getOrCreateUser(guildId, userId); // Fetch user data from DB
+    const family = userData.familyName ? await db.getFamily(guildId, userData.familyName) : null;
     
     // Fond
     ctx.fillStyle = '#1e2124';
@@ -187,7 +187,7 @@ async function generateFamilyImage(client, userId) {
         ctx.fillStyle = '#ffffff';
         ctx.font = '26px "MyCustomFont", sans-serif'; // Utiliser l'alias et un fallback générique
         ctx.textAlign = 'center';
-        ctx.fillText(String(`Lignée des ${family._id.toUpperCase()}`), 400, 45);
+        ctx.fillText(String(`Lignée des ${family.familyName.toUpperCase()}`), 400, 45);
         ctx.restore();
     }
 
@@ -233,15 +233,15 @@ async function generateFamilyImage(client, userId) {
 }
 
 // This function now needs to be async as it fetches data from DB
-async function getExtendedFamily(userId) {
-    const user = await db.getOrCreateUser(userId);
+async function getExtendedFamily(guildId, userId) {
+    const user = await db.getOrCreateUser(guildId, userId);
     const siblings = new Set();
     const grandparents = new Set();
     const unclesAunts = new Set();
     const cousins = new Set();
 
     const parents = [user.father, user.mother].filter(p => !!p);
-    const parentDataArray = await db.getUsersByIds(parents);
+    const parentDataArray = await db.getUsersByIds(guildId, parents);
     
     for (const parentData of parentDataArray) {
         for (const cId of (parentData.children || [])) {
@@ -251,7 +251,7 @@ async function getExtendedFamily(userId) {
         if (parentData.mother) grandparents.add(parentData.mother);
     }
 
-    const gpDataArray = await db.getUsersByIds(Array.from(grandparents));
+    const gpDataArray = await db.getUsersByIds(guildId, Array.from(grandparents));
     const uaIds = [];
     for (const gpData of gpDataArray) {
         for (const childId of (gpData.children || [])) {
@@ -262,7 +262,7 @@ async function getExtendedFamily(userId) {
         }
     }
 
-    const uaDataArray = await db.getUsersByIds(uaIds);
+    const uaDataArray = await db.getUsersByIds(guildId, uaIds);
     for (const uaData of uaDataArray) {
         for (const cousinId of (uaData.children || [])) {
             cousins.add(cousinId);
@@ -298,37 +298,37 @@ async function getReverseRole(role, targetData = null) { // Made async as target
 }
 
 // Gère la propagation du nom de famille aux descendants non mariés et sans enfants
-async function propagateNameChange(userId, oldName, newName) { // No longer needs `data`
-    const user = await db.getOrCreateUser(userId);
+async function propagateNameChange(guildId, userId, oldName, newName) { // No longer needs `data`
+    const user = await db.getOrCreateUser(guildId, userId);
     if (!user) return;
 
     for (const childId of user.children) {
-        const child = await db.getOrCreateUser(childId);
+        const child = await db.getOrCreateUser(guildId, childId);
         if (child && child.familyName === oldName) {
             // Logique : On ne change le nom que si l'enfant n'est pas marié et n'a pas d'enfants
             if (!child.spouse && child.children.length === 0) {
-                await db.updateUser(childId, { familyName: newName });
+                await db.updateUser(guildId, childId, { familyName: newName });
                 // Mise à jour du registre de famille
-                const newFamily = await db.getFamily(newName);
+                const newFamily = await db.getFamily(guildId, newName);
                 if (newFamily && !newFamily.members.includes(childId)) {
                     newFamily.members.push(childId);
-                    await db.updateFamily(newName, { members: newFamily.members });
+                    await db.updateFamily(guildId, newName, { members: newFamily.members });
                 }
                 // Remove from old family members if it was there
-                const oldFamily = await db.getFamily(oldName);
+                const oldFamily = await db.getFamily(guildId, oldName);
                 if (oldFamily) {
                     oldFamily.members = oldFamily.members.filter(id => id !== childId);
-                    await db.updateFamily(oldName, { members: oldFamily.members });
+                    await db.updateFamily(guildId, oldName, { members: oldFamily.members });
                 }
-                await propagateNameChange(childId, oldName, newName);
+                await propagateNameChange(guildId, childId, oldName, newName);
             }
         }
     }
 }
 
-async function areRelated(id1, id2) { // Made async
+async function areRelated(guildId, id1, id2) { // Made async
     if (id1 === id2) return 'soi-même';
-    const u1 = await db.getOrCreateUser(id1);
+    const u1 = await db.getOrCreateUser(guildId, id1);
     
     if (u1.customLinks && u1.customLinks[id2]) return u1.customLinks[id2];
     if (u1.spouse === id2) return 'conjoint(e)';
@@ -336,7 +336,7 @@ async function areRelated(id1, id2) { // Made async
     if (u1.mother === id2) return 'mère';
     if (u1.children.includes(id2)) return 'enfant';
 
-    const ext = await getExtendedFamily(id1); // Call async version
+    const ext = await getExtendedFamily(guildId, id1); // Call async version
     if (ext.siblings.has(id2)) return 'frère/soeur';
     if (ext.grandparents.has(id2)) return 'grand-parent';
     if (ext.unclesAunts.has(id2)) return 'oncle/tante';
@@ -346,9 +346,9 @@ async function areRelated(id1, id2) { // Made async
 }
 
 // Function to get all members of a family
-async function getFamilyMembers(familyName) { // Made async
+async function getFamilyMembers(guildId, familyName) { // Made async
     const normalizedFamilyName = familyName.toLowerCase();
-    const family = await db.getFamily(normalizedFamilyName);
+    const family = await db.getFamily(guildId, normalizedFamilyName);
     if (family) {
         return family.members;
     }
@@ -356,16 +356,16 @@ async function getFamilyMembers(familyName) { // Made async
 }
 
 // Function to get the head of a family
-async function getFamilyHead(familyName) { // Made async
+async function getFamilyHead(guildId, familyName) { // Made async
     const normalizedFamilyName = familyName.toLowerCase();
-    const family = await db.getFamily(normalizedFamilyName);
+    const family = await db.getFamily(guildId, normalizedFamilyName);
     return family ? family.head : null;
 }
 
 // New function to merge two families
-async function mergeFamilies(inviterFamilyName, invitedFamilyName, inviterId, invitedId, role) { // Made async
-    const inviterFamily = await db.getFamily(inviterFamilyName);
-    const invitedFamily = await db.getFamily(invitedFamilyName);
+async function mergeFamilies(guildId, inviterFamilyName, invitedFamilyName, inviterId, invitedId, role) { // Made async
+    const inviterFamily = await db.getFamily(guildId, inviterFamilyName);
+    const invitedFamily = await db.getFamily(guildId, invitedFamilyName);
 
     if (!inviterFamily || !invitedFamily) {
         console.error("Attempted to merge non-existent families.");
@@ -378,28 +378,28 @@ async function mergeFamilies(inviterFamilyName, invitedFamilyName, inviterId, in
             inviterFamily.members.push(memberId);
         }
         // Update each member's familyName
-        await db.updateUser(memberId, { familyName: inviterFamilyName });
+        await db.updateUser(guildId, memberId, { familyName: inviterFamilyName });
     }
-    await db.updateFamily(inviterFamilyName, { members: inviterFamily.members });
+    await db.updateFamily(guildId, inviterFamilyName, { members: inviterFamily.members });
 
     // Pont relationnel logique
-    const inviter = await db.getOrCreateUser(inviterId);
-    const invited = await db.getOrCreateUser(invitedId);
+    const inviter = await db.getOrCreateUser(guildId, inviterId);
+    const invited = await db.getOrCreateUser(guildId, invitedId);
 
     if (role === 'oncle' || role === 'tante') {
         // La cible devient le frère/soeur d'un des parents de l'inviteur
         const parentId = inviter.father || inviter.mother;
         if (parentId) {
-            const pData = await db.getOrCreateUser(parentId);
+            const pData = await db.getOrCreateUser(guildId, parentId);
             if (pData && (pData.father || pData.mother)) {
                 // On donne à l'invité les mêmes parents que le parent de l'inviteur (les grands-parents)
-                await db.updateUser(invitedId, { father: pData.father, mother: pData.mother });
+                await db.updateUser(guildId, invitedId, { father: pData.father, mother: pData.mother });
                 const gps = [pData.father, pData.mother].filter(g => g !== null);
                 for (const gpId of gps) {
-                    const gpData = await db.getOrCreateUser(gpId);
+                    const gpData = await db.getOrCreateUser(guildId, gpId);
                     if (gpData && !gpData.children.includes(invitedId)) {
                         gpData.children.push(invitedId);
-                        await db.updateUser(gpId, { children: gpData.children });
+                        await db.updateUser(guildId, gpId, { children: gpData.children });
                     }
                 }
             }
@@ -407,13 +407,13 @@ async function mergeFamilies(inviterFamilyName, invitedFamilyName, inviterId, in
     } else if (role === 'frère' || role === 'soeur') {
         // La cible partage les mêmes parents que l'inviteur
         if (inviter.father || inviter.mother) {
-            await db.updateUser(invitedId, { father: inviter.father, mother: inviter.mother });
+            await db.updateUser(guildId, invitedId, { father: inviter.father, mother: inviter.mother });
             const ps = [inviter.father, inviter.mother].filter(p => p !== null);
             for (const pId of ps) {
-                const pData = await db.getOrCreateUser(pId);
+                const pData = await db.getOrCreateUser(guildId, pId);
                 if (pData && !pData.children.includes(invitedId)) {
                     pData.children.push(invitedId);
-                    await db.updateUser(pId, { children: pData.children });
+                    await db.updateUser(guildId, pId, { children: pData.children });
                 }
             }
         }
@@ -421,20 +421,20 @@ async function mergeFamilies(inviterFamilyName, invitedFamilyName, inviterId, in
         // La cible devient le parent d'un des parents de l'inviteur
         const parentId = inviter.father || inviter.mother;
         if (parentId) {
-            const pData = await db.getOrCreateUser(parentId);
+            const pData = await db.getOrCreateUser(guildId, parentId);
             if (pData) {
                 const field = role === 'grand-père' ? 'father' : 'mother';
-                await db.updateUser(parentId, { [field]: invitedId });
+                await db.updateUser(guildId, parentId, { [field]: invitedId });
             }
             if (invited && !invited.children.includes(parentId)) {
                 invited.children.push(parentId);
-                await db.updateUser(invitedId, { children: invited.children });
+                await db.updateUser(guildId, invitedId, { children: invited.children });
             }
         }
     }
 
     // Remove the invited family
-    await db.deleteFamily(invitedFamilyName);
+    await db.deleteFamily(guildId, invitedFamilyName);
 }
 
 const client = new Client({
@@ -446,9 +446,9 @@ const client = new Client({
     ]
 });
 // --- Logique de modification des liens --- (Now async)
-async function executeLinkChange(id1, id2, role, action) { // No longer needs `data`
-    const d1 = await db.getOrCreateUser(id1);
-    const d2 = await db.getOrCreateUser(id2);
+async function executeLinkChange(guildId, id1, id2, role, action) { // No longer needs `data`
+    const d1 = await db.getOrCreateUser(guildId, id1);
+    const d2 = await db.getOrCreateUser(guildId, id2);
 
     // Nettoyage systématique des anciens liens
     let d1Update = { customLinks: d1.customLinks || {} };
@@ -475,8 +475,8 @@ async function executeLinkChange(id1, id2, role, action) { // No longer needs `d
     }
 
     if (action === 'remove') {
-        await db.updateUser(id1, d1Update);
-        await db.updateUser(id2, d2Update);
+        await db.updateUser(guildId, id1, d1Update);
+        await db.updateUser(guildId, id2, d2Update);
         return;
     }
 
@@ -495,28 +495,28 @@ async function executeLinkChange(id1, id2, role, action) { // No longer needs `d
         d2Update.customLinks = { ...(d2Update.customLinks || d2.customLinks), [id1]: await getReverseRole(role, d1) };
     }
 
-    await db.updateUser(id1, d1Update);
-    await db.updateUser(id2, d2Update);
+    await db.updateUser(guildId, id1, d1Update);
+    await db.updateUser(guildId, id2, d2Update);
     
     // Logique de mariage automatique pour Oncles/Tantes et Grands-parents
     if (['oncle', 'tante', 'grand-père', 'grand-mère'].includes(role)) {
-        await checkAndProposeMarriage(id2, d1.familyName);
+        await checkAndProposeMarriage(guildId, id2, d1.familyName);
     }
 }
 
-async function checkAndProposeMarriage(userId, familyName) {
-    const family = await db.getFamily(familyName);
+async function checkAndProposeMarriage(guildId, userId, familyName) {
+    const family = await db.getFamily(guildId, familyName);
     if (!family) return;
-    const userData = await db.getOrCreateUser(userId);
+    const userData = await db.getOrCreateUser(guildId, userId);
     if (userData.spouse) return;
 
     for (const mId of family.members) {
         if (mId === userId) continue;
-        const mData = await db.getOrCreateUser(mId);
+        const mData = await db.getOrCreateUser(guildId, mId);
         if (mData.spouse) continue;
         
-        const rel = await areRelated(userId, mId);
-        const targetRel = await areRelated(mId, userId);
+        const rel = await areRelated(guildId, userId, mId);
+        const targetRel = await areRelated(guildId, mId, userId);
         
         if ((rel === 'oncle' && targetRel === 'tante') || (rel === 'tante' && targetRel === 'oncle') || 
             (rel === 'grand-père' && targetRel === 'grand-mère') || (rel === 'grand-mère' && targetRel === 'grand-père')) {
@@ -526,7 +526,7 @@ async function checkAndProposeMarriage(userId, familyName) {
     }
 }
 
-async function startFamilyVote(interaction, author, target, role, action) {
+async function startFamilyVote(guildId, interaction, author, target, role, action) {
     const voteEmbed = new EmbedBuilder()
         .setTitle("🗳️ Vote de la Communauté")
         .setColor("#f1c40f")
@@ -565,11 +565,11 @@ async function startFamilyVote(interaction, author, target, role, action) {
     collector.on('end', async () => {
         if (votesYes.size > votesNo.size) {
             if (action === 'remove') {
-                await executeLinkChange(author.id, target.id, role, 'remove');
+                await executeLinkChange(guildId, author.id, target.id, role, 'remove');
                 await interaction.deleteReply();
                 await interaction.channel.send(`✅ **Vote validé !** Lien rompu entre ${author} et ${target}.`);
             } else {
-                await sendInvitation(interaction, author, target, role, action, true);
+                await sendInvitation(guildId, interaction, author, target, role, action, true);
             }
         } else {
             await interaction.deleteReply();
@@ -578,9 +578,9 @@ async function startFamilyVote(interaction, author, target, role, action) {
     });
 }
 
-async function sendInvitation(interaction, author, target, role, action, fromVote = false) {
-    const authorData = await db.getOrCreateUser(author.id);
-    const targetData = await db.getOrCreateUser(target.id);
+async function sendInvitation(guildId, interaction, author, target, role, action, fromVote = false) {
+    const authorData = await db.getOrCreateUser(guildId, author.id);
+    const targetData = await db.getOrCreateUser(guildId, target.id);
 
     let inviteEmbed = new EmbedBuilder()
         .setTitle("📩 Invitation Familiale")
@@ -614,21 +614,21 @@ async function sendInvitation(interaction, author, target, role, action, fromVot
         if (i.user.id !== target.id) return i.reply({ content: "Ce n'est pas pour vous.", flags: MessageFlags.Ephemeral });
 
         if (i.customId === 'i_ok') {
-            if (targetData.familyName && authorData.familyName && targetData.familyName !== authorData.familyName) await clearUserFamilyLinks(target.id);
-            await executeLinkChange(author.id, target.id, role, action);
+            if (targetData.familyName && authorData.familyName && targetData.familyName !== authorData.familyName) await clearUserFamilyLinks(guildId, target.id);
+            await executeLinkChange(guildId, author.id, target.id, role, action);
             if (authorData.familyName) {
-                const family = await db.getFamily(authorData.familyName);
+                const family = await db.getFamily(guildId, authorData.familyName);
                 if (family && !family.members.includes(target.id)) {
                     family.members.push(target.id);
-                    await db.updateFamily(authorData.familyName, { members: family.members });
+                    await db.updateFamily(guildId, authorData.familyName, { members: family.members });
                 }
-                await db.updateUser(target.id, { familyName: authorData.familyName });
+                await db.updateUser(guildId, target.id, { familyName: authorData.familyName });
             }
             await i.message.delete();
             await i.channel.send(`🎊 Félicitations ! ${target} est maintenant le/la **${role}** de ${author} !`);
         } else if (i.customId === 'i_merge') {
-            await mergeFamilies(authorData.familyName, targetData.familyName, author.id, target.id, role);
-            await executeLinkChange(author.id, target.id, role, action);
+            await mergeFamilies(guildId, authorData.familyName, targetData.familyName, author.id, target.id, role);
+            await executeLinkChange(guildId, author.id, target.id, role, action);
             await i.message.delete();
             await i.channel.send(`🤝 Les familles ont fusionné ! ${target} est maintenant le/la **${role}** de ${author} !`);
         } else {
@@ -646,11 +646,13 @@ client.once(Events.ClientReady, () => {
 
 client.on('messageCreate', async (message) => {
     if (message.author.bot || !message.content.startsWith(PREFIX)) return;
+    if (!message.guild) return message.reply("Cette commande ne peut être utilisée que dans un serveur."); // S'assurer que c'est dans un serveur
 
     const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
     const command = args.shift().toLowerCase();
     const authorId = message.author.id;
-    const authorData = await db.getOrCreateUser(authorId);
+    const guildId = message.guild.id;
+    const authorData = await db.getOrCreateUser(guildId, authorId);
     
     // On définit les commandes dont on veut garder la trace (social et info)
     const persistentCommands = ['family', 'info', 'familytop', 'account', 'marry', 'divorce', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold'];
@@ -671,7 +673,7 @@ client.on('messageCreate', async (message) => {
             const familyName = args.join(' ');
             if (!familyName) return message.reply(`Usage: ${PREFIX}adminfamily <Nom de la famille>`);
 
-            const family = await db.getFamily(familyName);
+            const family = await db.getFamily(guildId, familyName);
             if (!family) return message.reply(`❌ Famille "${familyName}" introuvable.`);
 
             const embed = new EmbedBuilder()
@@ -694,8 +696,8 @@ client.on('messageCreate', async (message) => {
             coll.on('collect', async (i) => {
                 if (i.values[0] === 'cancel') return i.message.delete();
                 if (i.values[0] === 'clear') {
-                    for (const mId of family.members) await db.updateUser(mId, { familyName: null, spouse: null, children: [], mother: null, father: null });
-                    await db.deleteFamily(familyName);
+                    for (const mId of family.members) await db.updateUser(guildId, mId, { familyName: null, spouse: null, children: [], mother: null, father: null });
+                    await db.deleteFamily(guildId, familyName);
                     await i.message.delete();
                     return i.channel.send(`✅ Famille **${familyName.toUpperCase()}** supprimée.`);
                 }
@@ -728,7 +730,7 @@ client.on('messageCreate', async (message) => {
                     await ui.deferUpdate();
 
                     const targetId = ui.values[0];
-                    const targetData = await db.getOrCreateUser(targetId);
+                    const targetData = await db.getOrCreateUser(guildId, targetId);
 
                     if (action === 'add' && targetData.familyName === family._id) {
                         await ui.followUp({ content: "❌ Cet utilisateur est déjà dans cette famille.", flags: MessageFlags.Ephemeral });
@@ -740,7 +742,7 @@ client.on('messageCreate', async (message) => {
                     }
 
                     if (action === 'remove') {
-                        await db.clearUserFamilyLinksDB(targetId);
+                        await db.clearUserFamilyLinksDB(guildId, targetId);
                         await msg.delete().catch(() => {});
                         return ui.channel.send(`✅ Membre <@${targetId}> retiré de la famille.`);
                     }
@@ -759,11 +761,11 @@ client.on('messageCreate', async (message) => {
                         
                         if (ri.customId === 'cancel_role') return msg.delete().catch(() => {});
                         
-                        await executeLinkChange(family.head, targetId, ri.values[0], 'add');
-                        await db.updateUser(targetId, { familyName: family._id });
+                        await executeLinkChange(guildId, family.head, targetId, ri.values[0], 'add');
+                        await db.updateUser(guildId, targetId, { familyName: family.familyName });
                         if (!family.members.includes(targetId)) {
                             family.members.push(targetId);
-                            await db.updateFamily(family._id, { members: family.members });
+                            await db.updateFamily(guildId, family.familyName, { members: family.members });
                         }
                         await msg.delete().catch(() => {});
                         return ri.channel.send(`✅ Rôle **${ri.values[0]}** mis à jour pour <@${targetId}>.`);
@@ -796,12 +798,12 @@ client.on('messageCreate', async (message) => {
 
                     let family = null;
                     if (targetId) {
-                        const targetData = await db.getOrCreateUser(targetId);
-                        if (targetData.familyName) family = await db.getFamily(targetData.familyName);
+                        const targetData = await db.getOrCreateUser(guildId, targetId);
+                        if (targetData.familyName) family = await db.getFamily(guildId, targetData.familyName);
                     }
 
                     if (!family) {
-                        family = await db.getFamily(searchArgs.join(' '));
+                        family = await db.getFamily(guildId, searchArgs.join(' '));
                         if (family && !targetId) targetId = family.head;
                     }
 
@@ -811,9 +813,9 @@ client.on('messageCreate', async (message) => {
                     if (isGlobalArg) targetId = family.head;
 
                     const [buffer, ext, targetData, membersWealth] = await Promise.all([
-                        generateFamilyImage(client, targetId),
-                        getExtendedFamily(targetId),
-                        db.getOrCreateUser(targetId),
+                        generateFamilyImage(client, guildId, targetId),
+                        getExtendedFamily(guildId, targetId),
+                        db.getOrCreateUser(guildId, targetId),
                         Promise.all(family.members.map(id => getUBUser(message.guild.id, id)))
                     ]);
 
@@ -823,7 +825,7 @@ client.on('messageCreate', async (message) => {
                     const childrenText = (targetData.children || []).map(formatMention).join(', ') || 'Aucun';
 
                     const attachment = new AttachmentBuilder(buffer, { name: 'family.png' });
-                    const displayTitle = family._id.toUpperCase();
+                    const displayTitle = family.familyName.toUpperCase();
                     
                     embed = new EmbedBuilder()
                         .setTitle(isGlobalArg ? `🌳 Lignée Complète : ${displayTitle}` : `🌿 Ma Branche : ${displayTitle}`)
@@ -833,7 +835,8 @@ client.on('messageCreate', async (message) => {
                             { name: '👑 Chef de Lignée', value: formatMention(family.head), inline: true },
                             { name: '👥 Population', value: `${family.members.length} membre(s)`, inline: true },
                             { name: '💰 Fortune Totale', value: `**${totalWealth.toLocaleString()}** cr.`, inline: true },
-                            { name: '💍 Union', value: spouseText, inline: true },
+                            { name: '📅 Création', value: family.createdAt ? new Date(family.createdAt).toLocaleDateString('fr-FR') : 'Inconnue', inline: true },
+                            { name: '� Union', value: spouseText, inline: true },
                             { name: '👨‍👩‍👧 Lignée Directe', value: `**Parents:** ${parentsText}\n**Enfants:** ${childrenText}`, inline: false },
                             { name: '🌳 Parenté Étendue', value: `**Fratrie:** ${Array.from(ext.siblings).map(formatMention).join(', ') || 'Aucun'} | **Grands-Parents:** ${Array.from(ext.grandparents).map(formatMention).join(', ') || 'Aucun'} | **Oncles/Tantes:** ${Array.from(ext.unclesAunts).map(formatMention).join(', ') || 'Aucun'} | **Cousins:** ${Array.from(ext.cousins).map(formatMention).join(', ') || 'Aucun'}`, inline: false }
                         )
@@ -857,7 +860,7 @@ client.on('messageCreate', async (message) => {
                     new ButtonBuilder().setCustomId('cancel_main').setLabel('Annuler').setStyle(ButtonStyle.Secondary)
                 ));
             } else {
-                const family = await db.getFamily(authorData.familyName);
+                const family = await db.getFamily(guildId, authorData.familyName);
                 const isHead = family.head === authorId;
                 embed.setDescription(`Dynastie : **${authorData.familyName.toUpperCase()}**\nRang : ${isHead ? "Chef" : "Membre"}`);
                 
@@ -887,13 +890,13 @@ client.on('messageCreate', async (message) => {
                 
                 if (i.customId === 'view_branch' || i.customId === 'view_global') {
                     await i.deferUpdate();
-                    const family = await db.getFamily(authorData.familyName);
+                    const family = await db.getFamily(guildId, authorData.familyName);
                     const targetId = i.customId === 'view_global' ? family.head : authorId;
                     
                     const [buffer, ext, targetData, membersWealth] = await Promise.all([
-                        generateFamilyImage(client, targetId),
-                        getExtendedFamily(targetId),
-                        db.getOrCreateUser(targetId),
+                        generateFamilyImage(client, guildId, targetId),
+                        getExtendedFamily(guildId, targetId),
+                        db.getOrCreateUser(guildId, targetId),
                         Promise.all(family.members.map(id => getUBUser(i.guild.id, id)))
                     ]);
 
@@ -903,14 +906,15 @@ client.on('messageCreate', async (message) => {
                     const childrenText = (targetData.children || []).map(formatMention).join(', ') || 'Aucun';
                     
                     const attachment = new AttachmentBuilder(buffer, { name: 'family.png' });
-                    const embed = new EmbedBuilder()
-                        .setTitle(i.customId === 'view_global' ? `🌳 Lignée Complète : ${family._id.toUpperCase()}` : `🌿 Ma Branche : ${family._id.toUpperCase()}`)
+                    embed = new EmbedBuilder()
+                        .setTitle(i.customId === 'view_global' ? `🌳 Lignée Complète : ${family.familyName.toUpperCase()}` : `🌿 Ma Branche : ${family.familyName.toUpperCase()}`)
                         .setColor('#5865F2')
                         .setImage('attachment://family.png')
                         .addFields(
                             { name: '👑 Chef de Lignée', value: formatMention(family.head), inline: true },
                             { name: '👥 Population', value: `${family.members.length} membre(s)`, inline: true },
                             { name: '💰 Fortune Totale', value: `**${totalWealth.toLocaleString()}** cr.`, inline: true },
+                            { name: '📅 Création', value: family.createdAt ? new Date(family.createdAt).toLocaleDateString('fr-FR') : 'Inconnue', inline: true },
                             { name: '💍 Union', value: spouseText, inline: true },
                             { name: '👨‍👩‍👧 Lignée Directe', value: `**Parents:** ${parentsText}\n**Enfants:** ${childrenText}`, inline: false },
                             { name: '🌳 Parenté Étendue', value: `**Fratrie:** ${Array.from(ext.siblings).map(formatMention).join(', ') || 'Aucun'} | **Grands-Parents:** ${Array.from(ext.grandparents).map(formatMention).join(', ') || 'Aucun'} | **Oncles/Tantes:** ${Array.from(ext.unclesAunts).map(formatMention).join(', ') || 'Aucun'} | **Cousins:** ${Array.from(ext.cousins).map(formatMention).join(', ') || 'Aucun'}`, inline: false }
@@ -965,7 +969,7 @@ client.on('messageCreate', async (message) => {
                     await ui.deferUpdate();
 
                     const targetId = ui.values[0];
-                    const targetData = await db.getOrCreateUser(targetId);
+                    const targetData = await db.getOrCreateUser(guildId, targetId);
                     const targetUser = client.users.cache.get(targetId) || await client.users.fetch(targetId).catch(() => null);
 
                     if (!targetUser) {
@@ -982,7 +986,7 @@ client.on('messageCreate', async (message) => {
                         return msg.delete();
                     }
 
-                    if (action === 'remove') return startFamilyVote(ui, message.author, targetUser, 'Aucun', 'remove');
+                    if (action === 'remove') return startFamilyVote(guildId, ui, message.author, targetUser, 'Aucun', 'remove');
 
                     const rMenu = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('r').setPlaceholder('Rôle...').addOptions(ROLES_LIST.map(r => ({ label: r, value: r }))));
                     const rCancel = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('c_r').setLabel('Annuler').setStyle(ButtonStyle.Danger));
@@ -996,8 +1000,8 @@ client.on('messageCreate', async (message) => {
 
                     if (ri.customId === 'c_r') return msg.delete();
 
-                    if (action === 'add') await sendInvitation(ri, message.author, targetUser, ri.values[0], 'add');
-                    else await startFamilyVote(ri, message.author, targetUser, ri.values[0], 'modify');
+                    if (action === 'add') await sendInvitation(guildId, ri, message.author, targetUser, ri.values[0], 'add');
+                    else await startFamilyVote(guildId, ri, message.author, targetUser, ri.values[0], 'modify');
                 } catch (e) {
                     console.error("Erreur family (membre/rôle):", e);
                     await msg.edit({ content: "Action annulée ou temps écoulé.", components: [] }).catch(() => {});
@@ -1010,7 +1014,7 @@ client.on('messageCreate', async (message) => {
         case 'familytop':
         case 'account': {
             await message.channel.sendTyping();
-            const showWealth = async (uId, uData) => {
+            const showWealth = async (guildId, uId, uData) => {
                 const members = [uId];
                 if (uData.spouse) members.push(uData.spouse);
                 uData.children.forEach(id => members.push(id));
@@ -1018,10 +1022,10 @@ client.on('messageCreate', async (message) => {
                 const total = results.reduce((acc, res) => acc + (res ? res.cash : 0), 0);
                 return new EmbedBuilder().setTitle('🏦 Banque Familiale').setColor('#f1c40f').addFields({ name: 'Fortune Totale', value: `💰 **${total.toLocaleString()}** cr.`, inline: false });
             };
-            const showTop = async () => {
+            const showTop = async (guildId) => {
                 const familyWealths = [];
-                const allUsers = await db.getAllUsers();
-                const families = await db.getAllFamilies();
+                const allUsers = await db.getAllUsers(guildId);
+                const families = await db.getAllFamilies(guildId);
                 
                 for (const fam of Object.values(families)) {
                     const members = fam.members;
@@ -1034,7 +1038,7 @@ client.on('messageCreate', async (message) => {
                 return embed;
             };
 
-            const initialEmbed = (command === 'familytop') ? await showTop() : await showWealth(authorId, authorData);
+            const initialEmbed = (command === 'familytop') ? await showTop(guildId) : await showWealth(guildId, authorId, authorData);
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('v_wealth').setLabel('Ma Fortune').setStyle(ButtonStyle.Success),
                 new ButtonBuilder().setCustomId('v_top').setLabel('🏆 Classement').setStyle(ButtonStyle.Primary),
@@ -1045,7 +1049,7 @@ client.on('messageCreate', async (message) => {
             coll.on('collect', async (i) => {
                 if (i.customId === 'cancel_bank') return i.message.delete();
                 await i.deferUpdate();
-                const newEmbed = (i.customId === 'v_top') ? await showTop() : await showWealth(authorId, authorData);
+                const newEmbed = (i.customId === 'v_top') ? await showTop(guildId) : await showWealth(guildId, authorId, authorData);
                 await i.editReply({ embeds: [newEmbed] });
             });
             return;
@@ -1072,8 +1076,8 @@ client.on('messageCreate', async (message) => {
             if (!target) return message.reply('Qui veux-tu épouser ?');
             if (target.id === authorId) return message.reply('Tu ne peux pas t\'épouser toi-même !');
 
-            const authorData = await db.getOrCreateUser(authorId);
-            const targetData = await db.getOrCreateUser(target.id);
+            const authorData = await db.getOrCreateUser(guildId, authorId);
+            const targetData = await db.getOrCreateUser(guildId, target.id);
 
             if (authorData.spouse) return message.reply(`Tu es déjà marié(e) à ${formatMention(authorData.spouse)}.`);
             if (targetData.spouse) return message.reply(`${formatMention(target.id)} est déjà marié(e).`);
@@ -1099,9 +1103,9 @@ client.on('messageCreate', async (message) => {
             collector.on('collect', async (i) => {
                 await i.deferUpdate(); // Acknowledge the interaction immediately
 
-                if (i.customId === 'm_accept') {
-                    const currentAuthorData = await db.getOrCreateUser(authorId);
-                    const currentTargetData = await db.getOrCreateUser(target.id);
+                if (i.customId === 'm_accept') { // Use guildId for all DB calls
+                    const currentAuthorData = await db.getOrCreateUser(guildId, authorId);
+                    const currentTargetData = await db.getOrCreateUser(guildId, target.id);
 
                     if (currentAuthorData.spouse || currentTargetData.spouse) {
                         await i.followUp({ content: "L'un de vous est déjà marié(e) ! La demande est annulée.", flags: MessageFlags.Ephemeral });
@@ -1117,36 +1121,36 @@ client.on('messageCreate', async (message) => {
                     if (!authorHasFamily && !targetHasFamily) {
                         // Scenario 1: Both have no family - create a new one
                         const newFamilyName = `${author.username.substring(0, 5)}-${target.username.substring(0, 5)}-famille`.toLowerCase();
-                        const family = await db.createFamily(newFamilyName, authorId);
+                        const family = await db.createFamily(guildId, newFamilyName, authorId);
                         family.members.push(target.id);
-                        await db.updateFamily(newFamilyName, { members: family.members });
-                        await db.updateUser(authorId, { familyName: newFamilyName });
-                        await db.updateUser(target.id, { familyName: newFamilyName });
+                        await db.updateFamily(guildId, newFamilyName, { members: family.members });
+                        await db.updateUser(guildId, authorId, { familyName: newFamilyName });
+                        await db.updateUser(guildId, target.id, { familyName: newFamilyName });
                         finalFamilyName = newFamilyName;
                         await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant ${adj} et ont fondé la famille **${newFamilyName.toUpperCase()}** !` });
                     } else if (authorHasFamily && !targetHasFamily) {
                         // Scenario 2: Author has family, target does not - target joins author's family
-                        await db.updateUser(target.id, { familyName: currentAuthorData.familyName });
-                        const authorFamily = await db.getFamily(currentAuthorData.familyName);
+                        await db.updateUser(guildId, target.id, { familyName: currentAuthorData.familyName });
+                        const authorFamily = await db.getFamily(guildId, currentAuthorData.familyName);
                         if (authorFamily && !authorFamily.members.includes(target.id)) {
                             authorFamily.members.push(target.id);
-                            await db.updateFamily(authorFamily._id, { members: authorFamily.members });
+                            await db.updateFamily(guildId, authorFamily.familyName, { members: authorFamily.members });
                         }
                         finalFamilyName = currentAuthorData.familyName;
                         await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant ${adj} ! ${formatMention(target.id)} a rejoint la famille **${currentAuthorData.familyName.toUpperCase()}** !` });
                     } else if (!authorHasFamily && targetHasFamily) {
                         // Scenario 3: Target has family, author does not - author joins target's family
-                        await db.updateUser(authorId, { familyName: currentTargetData.familyName });
-                        const targetFamily = await db.getFamily(currentTargetData.familyName);
+                        await db.updateUser(guildId, authorId, { familyName: currentTargetData.familyName });
+                        const targetFamily = await db.getFamily(guildId, currentTargetData.familyName);
                         if (targetFamily && !targetFamily.members.includes(authorId)) {
                             targetFamily.members.push(authorId);
-                            await db.updateFamily(targetFamily._id, { members: targetFamily.members });
+                            await db.updateFamily(guildId, targetFamily.familyName, { members: targetFamily.members });
                         }
                         finalFamilyName = currentTargetData.familyName;
                         await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant ${adj} ! ${formatMention(authorId)} a rejoint la famille **${currentTargetData.familyName.toUpperCase()}** !` });
                     } else if (authorHasFamily && targetHasFamily && currentAuthorData.familyName !== currentTargetData.familyName) {
                         // Scenario 4: Both have different families - merge families
-                        await mergeFamilies(currentAuthorData.familyName, currentTargetData.familyName, authorId, target.id, 'conjoint');
+                        await mergeFamilies(guildId, currentAuthorData.familyName, currentTargetData.familyName, authorId, target.id, 'conjoint');
                         finalFamilyName = currentAuthorData.familyName;
                         await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant ${adj} et leurs familles ont fusionné en **${finalFamilyName.toUpperCase()}** !` });
                     } else if (authorHasFamily && targetHasFamily && currentAuthorData.familyName === currentTargetData.familyName) {
@@ -1155,7 +1159,7 @@ client.on('messageCreate', async (message) => {
                     }
 
                     // Establish the spouse link
-                    await executeLinkChange(authorId, target.id, 'conjoint', 'add');
+                    await executeLinkChange(guildId, authorId, target.id, 'conjoint', 'add');
                     await msg.delete(); // Delete the proposal message
                 } else if (i.customId === 'm_decline') {
                     await i.followUp({ content: `😔 ${formatMention(target.id)} a refusé la demande en mariage de ${formatMention(authorId)}.` });
@@ -1179,6 +1183,40 @@ client.on('messageCreate', async (message) => {
             process.exit(0);
         }
 
+        case 'resetdb': {
+            if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                return message.reply({ embeds: [errorEmbed("Seuls les administrateurs peuvent réinitialiser la base de données.")] });
+            }
+
+            const resetEmbed = new EmbedBuilder()
+                .setTitle("⚠️ Réinitialisation de la Base de Données")
+                .setColor("#ff4757")
+                .setDescription("Êtes-vous sûr de vouloir supprimer **toutes les données** (utilisateurs et familles) ?\nCette action est irréversible.");
+
+            const resetRow = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('confirm_reset').setLabel('Confirmer la réinitialisation').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('cancel_reset').setLabel('Annuler').setStyle(ButtonStyle.Secondary)
+            );
+
+            const msg = await message.reply({ embeds: [resetEmbed], components: [resetRow] });
+            const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
+
+            collector.on('collect', async (i) => {
+                if (i.customId === 'confirm_reset') {
+                    await db.resetDatabase(guildId);
+                    await i.update({ content: "✅ La base de données a été entièrement réinitialisée.", embeds: [], components: [] });
+                } else {
+                    await i.update({ content: "❌ Action annulée.", embeds: [], components: [] });
+                }
+                collector.stop();
+            });
+
+            collector.on('end', (collected, reason) => {
+                if (reason === 'time' && collected.size === 0) msg.edit({ components: [] }).catch(() => {});
+            });
+            return;
+        }
+
         case 'info': {
             let targetUser = target;
             if (!targetUser && args[0]) {
@@ -1187,8 +1225,8 @@ client.on('messageCreate', async (message) => {
             }
             if (!targetUser) targetUser = message.author;
 
-            const userData = await db.getOrCreateUser(targetUser.id);
-            const family = userData.familyName ? await db.getFamily(userData.familyName) : null;
+            const userData = await db.getOrCreateUser(guildId, targetUser.id);
+            const family = userData.familyName ? await db.getFamily(guildId, userData.familyName) : null;
 
             const buildEmbed = () => new EmbedBuilder()
                 .setTitle(`Profil Familial - ${targetUser.username}`)
@@ -1230,7 +1268,7 @@ client.on('messageCreate', async (message) => {
                     return i.update({ content: "Votre genre ?", components: [gRow] });
                 }
                 if (i.customId === 'sel_gen') {
-                    await db.updateUser(authorId, { gender: i.values[0] });
+                    await db.updateUser(guildId, authorId, { gender: i.values[0] });
                     return i.update({ content: "✅ Genre mis à jour.", components: [] });
                 }
                 if (i.values?.[0] === 'name') {
@@ -1240,9 +1278,9 @@ client.on('messageCreate', async (message) => {
                 }
                 if (i.values?.[0] === 'spouse') {
                     if (!authorData.spouse) return i.reply({ content: "Pas de conjoint.", flags: MessageFlags.Ephemeral });
-                    const sData = await db.getOrCreateUser(authorData.spouse);
+                    const sData = await db.getOrCreateUser(guildId, authorData.spouse);
                     if (!sData.familyName) return i.reply({ content: "Pas de nom de famille.", flags: MessageFlags.Ephemeral });
-                    await db.updateUser(authorId, { familyName: sData.familyName });
+                    await db.updateUser(guildId, authorId, { familyName: sData.familyName });
                     return i.update({ content: "💍 Nom adopté !", components: [] });
                 }
             });
@@ -1250,14 +1288,14 @@ client.on('messageCreate', async (message) => {
         }
 
         case 'divorce': {
-            if (!authorData.spouse) return message.reply('Tu n\'es pas marié(e).');
-            await executeLinkChange(authorId, authorData.spouse, null, 'remove');
+            if (!authorData.spouse) return message.reply('Tu n\'es pas marié(e).'); // authorData already fetched with guildId
+            await executeLinkChange(guildId, authorId, authorData.spouse, null, 'remove');
             return message.reply(`💔 ${formatMention(authorId)} a divorcé de ${formatMention(authorData.spouse)}.`);
         }
 
         case 'hug': {
             if (!target) return message.reply('Qui veux-tu câliner ?');
-            const rel = await areRelated(authorId, target.id);
+            const rel = await areRelated(guildId, authorId, target.id);
             let desc = `${formatMention(authorId)} fait un gros câlin à ${formatMention(target.id)} !`;
             if (rel && rel !== 'soi-même') desc += ` ❤️ Les câlins entre **${rel}s** sont les meilleurs !`;
             if (rel === 'soi-même') desc = `Tu te fais un câlin à toi-même ? C'est mignon mais un peu solitaire !`;
@@ -1271,7 +1309,7 @@ client.on('messageCreate', async (message) => {
 
         case 'kiss': {
             if (!target) return message.reply('Qui veux-tu embrasser ?');
-            if (authorData.spouse !== target.id) {
+            if (authorData.spouse !== target.id) { // authorData already fetched with guildId
                 return message.reply(`Désolé, mais tu ne peux embrasser que ton/ta conjoint(e) ! 💍`);
             }
             const embed = new EmbedBuilder()
@@ -1283,7 +1321,7 @@ client.on('messageCreate', async (message) => {
 
         case 'pat': {
             if (!target) return message.reply('Qui veux-tu tapoter ?');
-            const rel = await areRelated(authorId, target.id); // Await async areRelated
+            const rel = await areRelated(guildId, authorId, target.id); // Await async areRelated
             let desc = `${formatMention(authorId)} tapote la tête de ${formatMention(target.id)}.`;
             if (['enfant', 'parent', 'frère/soeur'].includes(rel)) {
                 desc = `😊 ${formatMention(authorId)} tapote affectueusement la tête de son **${rel}**, ${formatMention(target.id)}.`;
@@ -1297,7 +1335,7 @@ client.on('messageCreate', async (message) => {
 
         case 'slap': {
             if (!target) return message.reply('Qui veux-tu gifler ?');
-            const rel = await areRelated(authorId, target.id); // Await async areRelated
+            const rel = await areRelated(guildId, authorId, target.id); // Await async areRelated
             let desc = `💥 ${formatMention(authorId)} donne une gifle à ${formatMention(target.id)} !`;
             if (rel && rel !== 'soi-même') desc += ` Oh non, une dispute de famille entre **${rel}s** !`;
             
@@ -1310,7 +1348,7 @@ client.on('messageCreate', async (message) => {
 
         case 'poke': {
             if (!target) return message.reply('Qui veux-tu titiller ?');
-            const rel = await areRelated(authorId, target.id); // Await async areRelated
+            const rel = await areRelated(guildId, authorId, target.id); // Await async areRelated
             let desc = `${formatMention(authorId)} donne un petit coup de doigt à ${formatMention(target.id)}.`;
             if (rel && rel !== 'soi-même') desc = `👉 ${formatMention(authorId)} embête son **${rel}**, ${formatMention(target.id)} !`;
 
@@ -1323,7 +1361,7 @@ client.on('messageCreate', async (message) => {
 
         case 'tickle': {
             if (!target) return message.reply('Qui veux-tu chatouiller ?');
-            const rel = await areRelated(authorId, target.id);
+            const rel = await areRelated(guildId, authorId, target.id);
             let desc = `🤣 ${formatMention(authorId)} chatouille ${formatMention(target.id)} jusqu'à ce qu'il/elle n'en puisse plus !`;
             if (rel && rel !== 'soi-même') desc += ` Les rires en famille sont précieux !`;
             const embed = new EmbedBuilder().setColor('#FFD700').setDescription(desc).setImage('https://media.giphy.com/media/v0reFosH7N8m4/giphy.gif');
@@ -1332,7 +1370,7 @@ client.on('messageCreate', async (message) => {
 
         case 'bite': {
             if (!target) return message.reply('Qui veux-tu mordre ?');
-            const rel = await areRelated(authorId, target.id);
+            const rel = await areRelated(guildId, authorId, target.id);
             let desc = `🦷 Nom ! ${formatMention(authorId)} a mordu ${formatMention(target.id)} !`;
             if (rel === 'conjoint(e)') desc = `🦷 ${formatMention(authorId)} donne un petit mordillement amoureux à ${formatMention(target.id)}...`;
             const embed = new EmbedBuilder().setColor('#8B0000').setDescription(desc).setImage('https://media.giphy.com/media/O9HeC68S69hPa/giphy.gif');
@@ -1348,7 +1386,7 @@ client.on('messageCreate', async (message) => {
 
         case 'cuddle': {
             if (!target) return message.reply('Qui veux-tu câliner ?');
-            const rel = await areRelated(authorId, target.id);
+            const rel = await areRelated(guildId, authorId, target.id);
             let desc = `🧸 ${formatMention(authorId)} fait un câlin tout doux à ${formatMention(target.id)}.`;
             if (['enfant', 'parent'].includes(rel)) desc = `🧸 ${formatMention(authorId)} serre tendrement son **${rel}** contre lui.`;
             const embed = new EmbedBuilder().setColor('#DEB887').setDescription(desc).setImage('https://media.giphy.com/media/lrr96YS85KkNi/giphy.gif');
@@ -1364,7 +1402,7 @@ client.on('messageCreate', async (message) => {
 
         case 'handhold': {
             if (!target) return message.reply('À qui veux-tu tenir la main ?');
-            const rel = await areRelated(authorId, target.id);
+            const rel = await areRelated(guildId, authorId, target.id);
             let desc = `🤝 ${formatMention(authorId)} prend la main de ${formatMention(target.id)}.`;
             if (rel === 'conjoint(e)') desc = `🤝 ${formatMention(authorId)} tient amoureusement la main de ${formatMention(target.id)}.`;
             const embed = new EmbedBuilder().setColor('#F0E68C').setDescription(desc).setImage('https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHpueG8ycWV6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/6YfMIn9680i9G/giphy.gif');
@@ -1374,39 +1412,41 @@ client.on('messageCreate', async (message) => {
 });
 
 client.on('interactionCreate', async (interaction) => {
-    if (!interaction.isModalSubmit()) return;
+    if (!interaction.isModalSubmit() || !interaction.guildId) return; // S'assurer que c'est dans un serveur
+
+    const guildId = interaction.guildId;
     
     if (interaction.customId === 'modal_create_fam') {
-        const name = interaction.fields.getTextInputValue('fam_name').toLowerCase();
-        if (await db.getFamily(name)) return interaction.reply({ content: "❌ Nom déjà pris.", flags: MessageFlags.Ephemeral });
-        await db.createFamily(name, interaction.user.id);
-        await db.updateUser(interaction.user.id, { familyName: name });
+        const name = interaction.fields.getTextInputValue('fam_name').toLowerCase(); // name is familyName
+        if (await db.getFamily(guildId, name)) return interaction.reply({ content: "❌ Nom déjà pris.", flags: MessageFlags.Ephemeral });
+        await db.createFamily(guildId, name, interaction.user.id);
+        await db.updateUser(guildId, interaction.user.id, { familyName: name });
         await interaction.reply({ content: `🎉 Famille **${name.toUpperCase()}** fondée !` });
     }
 
     if (interaction.customId === 'modal_bio') {
-        await db.updateUser(interaction.user.id, { bio: interaction.fields.getTextInputValue('bio_text') });
+        await db.updateUser(guildId, interaction.user.id, { bio: interaction.fields.getTextInputValue('bio_text') });
         await interaction.reply({ content: "✅ Bio mise à jour !", flags: MessageFlags.Ephemeral });
     }
 
     if (interaction.customId === 'modal_rename_branch') {
         const newName = interaction.fields.getTextInputValue('new_name').toLowerCase().trim();
-        if (await db.getFamily(newName)) return interaction.reply({ content: "❌ Nom déjà pris.", flags: MessageFlags.Ephemeral });
-        const uData = await db.getOrCreateUser(interaction.user.id);
+        if (await db.getFamily(guildId, newName)) return interaction.reply({ content: "❌ Nom déjà pris.", flags: MessageFlags.Ephemeral });
+        const uData = await db.getOrCreateUser(guildId, interaction.user.id);
         const oldName = uData.familyName;
-        const family = oldName ? await db.getFamily(oldName) : null;
+        const family = oldName ? await db.getFamily(guildId, oldName) : null;
 
         if (family?.head === interaction.user.id) {
-            await db.createFamily(newName, interaction.user.id);
-            await db.updateFamily(newName, { members: family.members });
-            for (const mId of family.members) await db.updateUser(mId, { familyName: newName });
-            await db.deleteFamily(oldName);
+            await db.createFamily(guildId, newName, interaction.user.id);
+            await db.updateFamily(guildId, newName, { members: family.members });
+            for (const mId of family.members) await db.updateUser(guildId, mId, { familyName: newName });
+            await db.deleteFamily(guildId, oldName);
             await interaction.reply({ content: `✅ Dynastie renommée : **${newName.toUpperCase()}** !` });
         } else {
-            if (oldName && family) await db.updateFamily(oldName, { members: family.members.filter(id => id !== interaction.user.id) });
-            await db.createFamily(newName, interaction.user.id);
-            await db.updateUser(interaction.user.id, { familyName: newName });
-            await propagateNameChange(interaction.user.id, oldName, newName);
+            if (oldName && family) await db.updateFamily(guildId, oldName, { members: family.members.filter(id => id !== interaction.user.id) });
+            await db.createFamily(guildId, newName, interaction.user.id);
+            await db.updateUser(guildId, interaction.user.id, { familyName: newName });
+            await propagateNameChange(guildId, interaction.user.id, oldName, newName);
             await interaction.reply({ content: `✅ Branche **${newName.toUpperCase()}** fondée !` });
         }
     }
