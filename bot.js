@@ -362,18 +362,17 @@ async function executeLinkChange(id1, id2, role, action) { // No longer needs `d
     const d1 = await db.getOrCreateUser(id1);
     const d2 = await db.getOrCreateUser(id2);
 
-    // Nettoyage systématique des anciens liens entre ces deux personnes
-    let d1Update = {};
-    let d2Update = {};
+    // Nettoyage systématique des anciens liens
+    let d1Update = { customLinks: d1.customLinks || {} };
+    let d2Update = { customLinks: d2.customLinks || {} };
 
-    if (d1.spouse === id2) { d1.spouse = null; d2.spouse = null; }
-    d1Update.children = d1.children.filter(id => id !== id2);
-    d2Update.parents = d2.parents.filter(id => id !== id1);
+    if (d1.spouse === id2) { d1Update.spouse = null; d2Update.spouse = null; }
+    d1Update.children = (d1.children || []).filter(id => id !== id2);
     if (d1.father === id2) d1Update.father = null;
     if (d1.mother === id2) d1Update.mother = null;
     if (d2.father === id1) d2Update.father = null;
     if (d2.mother === id1) d2Update.mother = null;
-    d2Update.children = d2.children.filter(id => id !== id1);
+    d2Update.children = (d2.children || []).filter(id => id !== id1);
 
     // Ensure customLinks exist before trying to delete
     if (d1.customLinks && d1.customLinks[id2]) {
@@ -610,11 +609,11 @@ client.on('messageCreate', async (message) => {
                 if (action === 'add') {
                     targetSelectRow = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('target').setPlaceholder('Choisir le membre à ajouter...'));
                 } else {
-                    // On ne propose pas le chef de famille pour modification/suppression via ce menu
+                    // On ne propose pas le chef pour modification/suppression
                     const filteredMembers = family.members.filter(mId => mId !== family.head);
                     
                     if (filteredMembers.length === 0) {
-                        return i.reply({ content: "❌ Cette famille ne contient aucun autre membre à modifier ou retirer.", flags: MessageFlags.Ephemeral });
+                        return i.reply({ content: "❌ Aucun autre membre à modifier ou retirer.", flags: MessageFlags.Ephemeral });
                     }
 
                     const memberOptions = await Promise.all(filteredMembers.map(async (mId) => {
@@ -626,7 +625,7 @@ client.on('messageCreate', async (message) => {
                 await i.update({ content: `Action: **${action}**. Sélectionnez le membre.`, components: [targetSelectRow] });
 
                 try {
-                    const ui = await i.message.awaitMessageComponent({ 
+                    const ui = await msg.awaitMessageComponent({ 
                         filter: subI => subI.user.id === authorId && subI.customId === 'target', 
                         time: 60000 
                     });
@@ -646,29 +645,23 @@ client.on('messageCreate', async (message) => {
 
                     if (action === 'remove') {
                         await db.clearUserFamilyLinksDB(targetId);
-                        await msg.delete();
+                        await msg.delete().catch(() => {});
                         return ui.channel.send(`✅ Membre <@${targetId}> retiré de la famille.`);
                     }
 
-                    const rMenu = new ActionRowBuilder().addComponents(
-                        new StringSelectMenuBuilder().setCustomId('role').setPlaceholder('Rôle...')
-                            .addOptions(ROLES_LIST.map(r => ({ label: r, value: r })))
-                    );
-                    const rBtnRow = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId('cancel_role').setLabel('Annuler').setStyle(ButtonStyle.Danger)
-                    );
+                    const rMenu = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('role').setPlaceholder('Rôle...').addOptions(ROLES_LIST.map(r => ({ label: r, value: r }))));
+                    const rBtnRow = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('cancel_role').setLabel('Annuler').setStyle(ButtonStyle.Danger));
                     
-                    // On utilise editReply car l'interaction a été "deferred"
                     await ui.editReply({ content: `Attribuer un rôle à <@${targetId}> :`, components: [rMenu, rBtnRow] });
 
                     try {
-                        const ri = await i.message.awaitMessageComponent({ 
+                        const ri = await msg.awaitMessageComponent({ 
                             filter: subI => subI.user.id === authorId && ['role', 'cancel_role'].includes(subI.customId), 
                             time: 60000 
                         });
-                        await ri.deferUpdate(); // Acquittement immédiat
+                        await ri.deferUpdate();
                         
-                        if (ri.customId === 'cancel_role') return i.message.delete();
+                        if (ri.customId === 'cancel_role') return msg.delete().catch(() => {});
                         
                         await executeLinkChange(family.head, targetId, ri.values[0], 'add');
                         await db.updateUser(targetId, { familyName: family._id });
@@ -676,7 +669,7 @@ client.on('messageCreate', async (message) => {
                             family.members.push(targetId);
                             await db.updateFamily(family._id, { members: family.members });
                         }
-                        await msg.delete();
+                        await msg.delete().catch(() => {});
                         return ri.channel.send(`✅ Rôle **${ri.values[0]}** mis à jour pour <@${targetId}>.`);
                     } catch (e) {
                         console.error("Erreur sélection rôle admin:", e);
