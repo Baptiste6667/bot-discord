@@ -1081,7 +1081,7 @@ client.on('messageCreate', async (message) => {
                     { name: 'ℹ️ Profil', value: `\`${PREFIX}info [@User]\` : Fiche d'identité et personnalisation.` },
                     { name: '💰 Économie', value: `\`${PREFIX}account\` : Fortune du foyer et classement des richesses.` },
                     { name: '💍 Interactions', value: `\`${PREFIX}marry <@User>\` : Mariage.\n\`${PREFIX}divorce\`, \`${PREFIX}hug\`, \`${PREFIX}kiss\`, \`${PREFIX}pat\`, \`${PREFIX}slap\`, \`${PREFIX}tickle\`, \`${PREFIX}dance\`, \`${PREFIX}cuddle\`, \`${PREFIX}bite\`, \`${PREFIX}highfive\`, \`${PREFIX}handhold\`` },
-                    { name: '⚙️ Administration', value: `\`${PREFIX}adminfamily <Nom>\` : Outils de gestion forcée pour modérateurs.` }
+                    { name: '⚙️ Administration', value: `\`${PREFIX}adminfamily <Nom>\` : Outils de gestion forcée.\n\`${PREFIX}resetdb\` : Réinitialisation complète des données du serveur (Admin uniquement).` }
                 );
             const sentHelp = await message.channel.send({ embeds: [h] });
             return autoDelete(sentHelp, 60000);
