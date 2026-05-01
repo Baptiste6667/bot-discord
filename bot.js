@@ -655,7 +655,7 @@ client.on('messageCreate', async (message) => {
     const authorData = await db.getOrCreateUser(guildId, authorId);
     
     // On définit les commandes dont on veut garder la trace (social et info)
-    const persistentCommands = ['family', 'info', 'familytop', 'account', 'marry', 'divorce', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold'];
+    const persistentCommands = ['family', 'info', 'listfamilies', 'familytop', 'account', 'marry', 'divorce', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold']; // Ces commandes ne verront pas leur réponse supprimée
     
     // On ne supprime le message que si ce n'est pas une commande persistante
     if (!persistentCommands.includes(command)) message.delete().catch(() => {});
@@ -669,13 +669,14 @@ client.on('messageCreate', async (message) => {
 
     switch (command) {
         case 'adminfamily': {
+            const adminMsgTimeout = 30000; // Suppression après 30 secondes
             try {
-                if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) return message.reply("❌ Admin uniquement.");
+                if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) return autoDelete(await message.reply("❌ Admin uniquement."), adminMsgTimeout);
                 const familyName = args.join(' ');
-                if (!familyName) return message.reply(`Usage: ${PREFIX}adminfamily <Nom de la famille>`);
+                if (!familyName) return autoDelete(await message.reply(`Usage: ${PREFIX}adminfamily <Nom de la famille>`), adminMsgTimeout);
 
                 const family = await db.getFamily(guildId, familyName);
-                if (!family) return message.reply(`❌ Famille "${familyName}" introuvable.`);
+                if (!family) return autoDelete(await message.reply(`❌ Famille "${familyName}" introuvable.`), adminMsgTimeout);
 
                 const embed = new EmbedBuilder()
                 .setTitle(`🛠️ Admin : Famille ${familyName.toUpperCase()}`)
@@ -691,11 +692,11 @@ client.on('messageCreate', async (message) => {
             ];
             const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('admin_action').setPlaceholder('Action...').addOptions(options));
 
-                const msg = await message.reply({ embeds: [embed], components: [row] });
+                const msg = await message.reply({ embeds: [embed], components: [row] }); // Ce message sera supprimé par le collector.on('end')
                 const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && i.customId === 'admin_action', time: 120000 });
 
                 coll.on('collect', async (i) => {
-                    if (i.values[0] === 'cancel') return i.message.delete();
+                    if (i.values[0] === 'cancel') return i.message.delete().catch(() => {});
                     if (i.values[0] === 'clear') {
                     for (const mId of family.members) await db.updateUser(guildId, mId, { familyName: null, spouse: null, children: [], mother: null, father: null });
                     await db.deleteFamily(guildId, familyName);
@@ -712,7 +713,7 @@ client.on('messageCreate', async (message) => {
                     const filteredMembers = family.members.filter(mId => mId !== family.head);
                     
                     if (filteredMembers.length === 0) {
-                        return i.reply({ content: "❌ Aucun autre membre à modifier ou retirer.", flags: MessageFlags.Ephemeral });
+                        return autoDelete(await i.reply({ content: "❌ Aucun autre membre à modifier ou retirer.", flags: MessageFlags.Ephemeral }), adminMsgTimeout);
                     }
 
                     const memberOptions = await Promise.all(filteredMembers.map(async (mId) => {
@@ -734,11 +735,11 @@ client.on('messageCreate', async (message) => {
                     const targetData = await db.getOrCreateUser(guildId, targetId);
 
                     if (action === 'add' && targetData.familyName === family.familyName) {
-                        await ui.followUp({ content: "❌ Cet utilisateur est déjà dans cette famille.", flags: MessageFlags.Ephemeral });
+                        await autoDelete(await ui.followUp({ content: "❌ Cet utilisateur est déjà dans cette famille.", flags: MessageFlags.Ephemeral }), adminMsgTimeout);
                         return msg.delete();
                     }
                     if ((action === 'remove' || action === 'modify') && targetData.familyName !== family.familyName) {
-                        await ui.followUp({ content: "❌ Cet utilisateur n'est pas dans cette famille.", flags: MessageFlags.Ephemeral });
+                        await autoDelete(await ui.followUp({ content: "❌ Cet utilisateur n'est pas dans cette famille.", flags: MessageFlags.Ephemeral }), adminMsgTimeout);
                         return msg.delete();
                     }
 
@@ -762,8 +763,8 @@ client.on('messageCreate', async (message) => {
                         
                         if (ri.customId === 'cancel_role') return msg.delete().catch(() => {});
                         
-                        await executeLinkChange(guildId, family.head, targetId, ri.values[0], 'add');
-                        await db.updateUser(guildId, targetId, { familyName: family.familyName });
+                        await executeLinkChange(guildId, family.head, targetId, ri.values[0], 'add'); // family.head est l'ID du chef
+                        await db.updateUser(guildId, targetId, { familyName: family.familyName }); // family.familyName est le nom de la famille
                         if (!family.members.includes(targetId)) {
                             family.members.push(targetId);
                             await db.updateFamily(guildId, family.familyName, { members: family.members });
@@ -776,7 +777,7 @@ client.on('messageCreate', async (message) => {
                     }
                 } catch (e) {
                     console.error("Erreur sélection membre admin:", e);
-                    await msg.edit({ content: "Action annulée ou temps écoulé pour la sélection du membre.", components: [] }).catch(() => {});
+                    await msg.edit({ content: "Action annulée ou temps écoulé pour la sélection du membre.", components: [] }).catch(() => {}); // Ce message sera supprimé par le collector.on('end')
                 }
             });
                 coll.on('end', () => msg.edit({ components: [] }).catch(() => {}));
@@ -885,7 +886,7 @@ client.on('messageCreate', async (message) => {
                                 { label: 'Enlever un membre', value: 'remove' },
                                 { label: 'Quitter la famille', value: 'leave' }
                             ]);
-                        if (isHead) menu.addOptions({ label: 'Dissoudre la famille', value: 'delete' });
+                if (isHead) menu.addOptions({ label: 'Dissoudre la famille', value: 'delete' }); // Option de dissolution pour le chef
                         menu.addOptions({ label: 'Annuler', value: 'cancel' });
                         rows.push(new ActionRowBuilder().addComponents(menu));
                         rows.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('cancel_main').setLabel('Fermer').setStyle(ButtonStyle.Secondary)));
@@ -894,7 +895,7 @@ client.on('messageCreate', async (message) => {
 
                 const msg = await message.reply({ embeds: [embed], components: rows });
                 const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['fam_action', 'create_fam', 'cancel_main', 'view_branch', 'view_global'].includes(i.customId), time: 120000 });
-
+                
                 collector.on('collect', async (i) => {
                     if (i.customId === 'cancel_main' || i.values?.[0] === 'cancel') return i.message.delete();
 
@@ -935,13 +936,13 @@ client.on('messageCreate', async (message) => {
                 
                 if (i.customId === 'create_fam') {
                     const modal = new ModalBuilder().setCustomId('modal_create_fam').setTitle('Nouvelle Famille');
-                    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('fam_name').setLabel("Nom de famille").setStyle(TextInputStyle.Short).setRequired(true)));
+                    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('fam_name').setLabel("Nom de famille").setStyle(TextInputStyle.Short).setRequired(true).setPlaceholder("Ex: Les Dupont")));
                     return i.showModal(modal);
                 }
 
                 const action = i.values[0];
                 if (action === 'delete') {
-                    const confirm = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('confirm_del').setLabel('Confirmer').setStyle(ButtonStyle.Danger));
+                    const confirm = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('confirm_del').setLabel('Confirmer la dissolution').setStyle(ButtonStyle.Danger));
                     return i.update({ content: "⚠️ Dissoudre la famille ?", components: [confirm] });
                 }
 
@@ -955,7 +956,7 @@ client.on('messageCreate', async (message) => {
                 if (action === 'add') {
                     targetSelectRow = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('Choisir le futur membre...'));
                 } else {
-                    const family = await db.getFamily(authorData.familyName);
+                    const family = await db.getFamily(guildId, authorData.familyName); // Récupérer la famille pour le filtrage
                     // On ne propose pas l'auteur lui-même dans la liste des membres à gérer
                     const filteredMembers = family.members.filter(mId => mId !== authorId);
 
@@ -983,12 +984,12 @@ client.on('messageCreate', async (message) => {
                     const targetUser = client.users.cache.get(targetId) || await client.users.fetch(targetId).catch(() => null);
 
                     if (!targetUser) {
-                        await ui.followUp({ content: "❌ Impossible de trouver cet utilisateur.", flags: MessageFlags.Ephemeral });
+                        await autoDelete(await ui.followUp({ content: "❌ Impossible de trouver cet utilisateur.", flags: MessageFlags.Ephemeral }), adminMsgTimeout);
                         return msg.delete();
                     }
 
                     if (action === 'add' && (targetData.familyName === authorData.familyName || targetId === authorId)) {
-                        await ui.followUp({ content: "❌ Cet utilisateur fait déjà partie de votre famille ou c'est vous-même.", flags: MessageFlags.Ephemeral });
+                        await autoDelete(await ui.followUp({ content: "❌ Cet utilisateur fait déjà partie de votre famille ou c'est vous-même.", flags: MessageFlags.Ephemeral }), adminMsgTimeout);
                         return msg.delete();
                     }
                     if ((action === 'remove' || action === 'modify') && targetData.familyName !== authorData.familyName) {
@@ -998,7 +999,7 @@ client.on('messageCreate', async (message) => {
 
                     if (action === 'remove') return startFamilyVote(guildId, ui, message.author, targetUser, 'Aucun', 'remove');
 
-                    const rMenu = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('r').setPlaceholder('Rôle...').addOptions(ROLES_LIST.map(r => ({ label: r, value: r }))));
+                    const rMenu = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('r').setPlaceholder('Rôle...').addOptions(ROLES_LIST.map(r => ({ label: r, value: r })))); // Menu de sélection du rôle
                     const rCancel = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('c_r').setLabel('Annuler').setStyle(ButtonStyle.Danger));
                     await ui.editReply({ content: `Rôle pour <@${targetUser.id}> :`, components: [rMenu, rCancel] });
 
@@ -1011,7 +1012,7 @@ client.on('messageCreate', async (message) => {
                     if (ri.customId === 'c_r') return msg.delete();
 
                     if (action === 'add') await sendInvitation(guildId, ri, message.author, targetUser, ri.values[0], 'add');
-                    else await startFamilyVote(guildId, ri, message.author, targetUser, ri.values[0], 'modify');
+                    else await startFamilyVote(guildId, ri, message.author, targetUser, ri.values[0], 'modify'); // L'interaction `ri` est passée au vote
                 } catch (e) {
                     console.error("Erreur family (membre/rôle):", e);
                     await msg.edit({ content: "Action annulée ou temps écoulé.", components: [] }).catch(() => {});
@@ -1019,7 +1020,7 @@ client.on('messageCreate', async (message) => {
             });
                 collector.on('end', () => msg.edit({ components: [] }).catch(() => {}));
             } catch (err) {
-                console.error("Erreur commande family:", err);
+                console.error("Erreur commande family (dashboard):", err);
                 return message.reply({ embeds: [errorEmbed("Une erreur est survenue lors de l'affichage de la famille.")] });
             }
             return;
@@ -1076,7 +1077,7 @@ client.on('messageCreate', async (message) => {
                 .setThumbnail(client.user.displayAvatarURL())
                 .setDescription(`Gérez vos lignées et votre fortune via nos dashboards interactifs !\nPréfixe : \`${PREFIX}\``)
                 .addFields(
-                    { name: '🏠 Famille', value: `\`${PREFIX}family\` : Dashboard personnel.\n\`${PREFIX}family <Nom/ID> [global]\` : Arbre de branche ou de lignée complète.` },
+                    { name: '🏠 Famille', value: `\`${PREFIX}family\` : Dashboard personnel.\n\`${PREFIX}family <Nom/ID> [global]\` : Arbre visuel.\n\`${PREFIX}listfamilies\` : Liste toutes les familles du serveur.` },
                     { name: 'ℹ️ Profil', value: `\`${PREFIX}info [@User]\` : Fiche d'identité et personnalisation.` },
                     { name: '💰 Économie', value: `\`${PREFIX}account\` : Fortune du foyer et classement des richesses.` },
                     { name: '💍 Interactions', value: `\`${PREFIX}marry <@User>\` : Mariage.\n\`${PREFIX}divorce\`, \`${PREFIX}hug\`, \`${PREFIX}kiss\`, \`${PREFIX}pat\`, \`${PREFIX}slap\`, \`${PREFIX}tickle\`, \`${PREFIX}dance\`, \`${PREFIX}cuddle\`, \`${PREFIX}bite\`, \`${PREFIX}highfive\`, \`${PREFIX}handhold\`` },
@@ -1218,9 +1219,9 @@ client.on('messageCreate', async (message) => {
             collector.on('collect', async (i) => {
                 if (i.customId === 'confirm_reset') {
                     await db.resetDatabase(guildId);
-                    await i.update({ content: "✅ La base de données a été entièrement réinitialisée.", embeds: [], components: [] });
+                    await autoDelete(await i.update({ content: "✅ La base de données de ce serveur a été entièrement réinitialisée.", embeds: [], components: [] }), 10000); // Supprimer après 10s
                 } else {
-                    await i.update({ content: "❌ Action annulée.", embeds: [], components: [] });
+                    await autoDelete(await i.update({ content: "❌ Action annulée.", embeds: [], components: [] }), 5000); // Supprimer après 5s
                 }
                 collector.stop();
             });
@@ -1231,8 +1232,41 @@ client.on('messageCreate', async (message) => {
             return;
         }
 
+        case 'listfamilies': {
+            try { // Cette commande ne sera pas auto-supprimée
+                const families = await db.getAllFamilies(guildId);
+                const familyList = Object.values(families);
+
+                if (familyList.length === 0) {
+                    return message.reply({ embeds: [errorEmbed("Aucune famille n'a encore été créée sur ce serveur.")] });
+                }
+
+                // Tri alphabétique par nom
+                familyList.sort((a, b) => a.familyName.localeCompare(b.familyName));
+
+                const embed = new EmbedBuilder()
+                    .setTitle(`🏰 Dynasties de ${message.guild.name}`)
+                    .setColor('#5865F2')
+                    .setThumbnail(message.guild.iconURL())
+                    .setDescription(`Voici la liste des **${familyList.length}** familles fondées sur ce serveur :`)
+                    .setTimestamp();
+
+                const listText = familyList.map((f, i) => {
+                    const date = f.createdAt ? new Date(f.createdAt).toLocaleDateString('fr-FR') : 'Inconnue';
+                    return `**${i + 1}. ${f.familyName.toUpperCase()}**\n┕ 👑 Chef: ${formatMention(f.head)} | 👥 Membres: ${f.members.length} | 📅 ${date}`;
+                }).join('\n\n');
+
+                embed.setDescription(`${embed.data.description}\n\n${listText.length > 4000 ? listText.substring(0, 3997) + '...' : listText}`);
+
+                return message.reply({ embeds: [embed] });
+            } catch (err) {
+                console.error("Erreur listfamilies:", err);
+                return message.reply({ embeds: [errorEmbed("Impossible de récupérer la liste des familles.")] });
+            }
+        }
+
         case 'info': {
-            let targetUser = target;
+            let targetUser = target; // Cette commande ne sera pas auto-supprimée
             if (!targetUser && args[0]) {
                 // Tente de récupérer l'utilisateur par ID si aucune mention n'est présente
                 targetUser = client.users.cache.get(args[0]) || await client.users.fetch(args[0]).catch(() => null);
@@ -1282,8 +1316,8 @@ client.on('messageCreate', async (message) => {
                     return i.update({ content: "Votre genre ?", components: [gRow] });
                 }
                 if (i.customId === 'sel_gen') {
-                    await db.updateUser(guildId, authorId, { gender: i.values[0] });
-                    return i.update({ content: "✅ Genre mis à jour.", components: [] });
+                    await db.updateUser(guildId, authorId, { gender: i.values[0] }); // La réponse est persistante
+                    return i.update({ content: "✅ Genre mis à jour.", components: [] }); 
                 }
                 if (i.values?.[0] === 'name') {
                     const modal = new ModalBuilder().setCustomId('modal_rename_branch').setTitle('Nom de Branche');
@@ -1295,20 +1329,20 @@ client.on('messageCreate', async (message) => {
                     const sData = await db.getOrCreateUser(guildId, authorData.spouse);
                     if (!sData.familyName) return i.reply({ content: "Pas de nom de famille.", flags: MessageFlags.Ephemeral });
                     await db.updateUser(guildId, authorId, { familyName: sData.familyName });
-                    return i.update({ content: "💍 Nom adopté !", components: [] });
+                    return i.update({ content: "💍 Nom adopté !", components: [] }); // La réponse est persistante
                 }
             });
             return;
         }
 
         case 'divorce': {
-            if (!authorData.spouse) return message.reply('Tu n\'es pas marié(e).'); // authorData already fetched with guildId
+            if (!authorData.spouse) return message.reply('Tu n\'es pas marié(e).'); // La réponse est persistante
             await executeLinkChange(guildId, authorId, authorData.spouse, null, 'remove');
-            return message.reply(`💔 ${formatMention(authorId)} a divorcé de ${formatMention(authorData.spouse)}.`);
+            return message.reply(`💔 ${formatMention(authorId)} a divorcé de ${formatMention(authorData.spouse)}.`); // La réponse est persistante
         }
 
         case 'hug': {
-            if (!target) return message.reply('Qui veux-tu câliner ?');
+            if (!target) return message.reply('Qui veux-tu câliner ?'); // La réponse est persistante
             const rel = await areRelated(guildId, authorId, target.id);
             let desc = `${formatMention(authorId)} fait un gros câlin à ${formatMention(target.id)} !`;
             if (rel && rel !== 'soi-même') desc += ` ❤️ Les câlins entre **${rel}s** sont les meilleurs !`;
@@ -1318,23 +1352,23 @@ client.on('messageCreate', async (message) => {
                 .setColor('#FFC0CB')
                 .setDescription(desc)
                 .setImage('https://media.giphy.com/media/u9B3S2ArX9X5S/giphy.gif');
-            return message.reply({ embeds: [embed] });
+            return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
 
         case 'kiss': {
-            if (!target) return message.reply('Qui veux-tu embrasser ?');
+            if (!target) return message.reply('Qui veux-tu embrasser ?'); // La réponse est persistante
             if (authorData.spouse !== target.id) { // authorData already fetched with guildId
-                return message.reply(`Désolé, mais tu ne peux embrasser que ton/ta conjoint(e) ! 💍`);
+                return message.reply(`Désolé, mais tu ne peux embrasser que ton/ta conjoint(e) ! 💍`); // La réponse est persistante
             }
             const embed = new EmbedBuilder()
                 .setColor('#FF0000')
                 .setDescription(`💋 ${formatMention(authorId)} embrasse amoureusement ${formatMention(target.id)} !`)
                 .setImage('https://media.giphy.com/media/G3va31WfEKhS8/giphy.gif');
-            return message.reply({ embeds: [embed] });
+            return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
 
         case 'pat': {
-            if (!target) return message.reply('Qui veux-tu tapoter ?');
+            if (!target) return message.reply('Qui veux-tu tapoter ?'); // La réponse est persistante
             const rel = await areRelated(guildId, authorId, target.id); // Await async areRelated
             let desc = `${formatMention(authorId)} tapote la tête de ${formatMention(target.id)}.`;
             if (['enfant', 'parent', 'frère/soeur'].includes(rel)) {
@@ -1344,11 +1378,11 @@ client.on('messageCreate', async (message) => {
                 .setColor('#87CEEB')
                 .setDescription(desc)
                 .setImage('https://media.giphy.com/media/ARSp9T7wwxNcs/giphy.gif');
-            return message.reply({ embeds: [embed] });
+            return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
 
         case 'slap': {
-            if (!target) return message.reply('Qui veux-tu gifler ?');
+            if (!target) return message.reply('Qui veux-tu gifler ?'); // La réponse est persistante
             const rel = await areRelated(guildId, authorId, target.id); // Await async areRelated
             let desc = `💥 ${formatMention(authorId)} donne une gifle à ${formatMention(target.id)} !`;
             if (rel && rel !== 'soi-même') desc += ` Oh non, une dispute de famille entre **${rel}s** !`;
@@ -1357,11 +1391,11 @@ client.on('messageCreate', async (message) => {
                 .setColor('#FFA500')
                 .setDescription(desc)
                 .setImage('https://media.giphy.com/media/uG3lKscP9lE1W/giphy.gif');
-            return message.reply({ embeds: [embed] });
+            return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
 
         case 'poke': {
-            if (!target) return message.reply('Qui veux-tu titiller ?');
+            if (!target) return message.reply('Qui veux-tu titiller ?'); // La réponse est persistante
             const rel = await areRelated(guildId, authorId, target.id); // Await async areRelated
             let desc = `${formatMention(authorId)} donne un petit coup de doigt à ${formatMention(target.id)}.`;
             if (rel && rel !== 'soi-même') desc = `👉 ${formatMention(authorId)} embête son **${rel}**, ${formatMention(target.id)} !`;
@@ -1370,57 +1404,57 @@ client.on('messageCreate', async (message) => {
                 .setColor('#98FB98')
                 .setDescription(desc)
                 .setImage('https://media.giphy.com/media/1X7Ag3SAsZ2Gk/giphy.gif');
-            return message.reply({ embeds: [embed] });
+            return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
 
         case 'tickle': {
-            if (!target) return message.reply('Qui veux-tu chatouiller ?');
+            if (!target) return message.reply('Qui veux-tu chatouiller ?'); // La réponse est persistante
             const rel = await areRelated(guildId, authorId, target.id);
             let desc = `🤣 ${formatMention(authorId)} chatouille ${formatMention(target.id)} jusqu'à ce qu'il/elle n'en puisse plus !`;
             if (rel && rel !== 'soi-même') desc += ` Les rires en famille sont précieux !`;
             const embed = new EmbedBuilder().setColor('#FFD700').setDescription(desc).setImage('https://media.giphy.com/media/v0reFosH7N8m4/giphy.gif');
-            return message.reply({ embeds: [embed] });
+            return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
 
         case 'bite': {
-            if (!target) return message.reply('Qui veux-tu mordre ?');
+            if (!target) return message.reply('Qui veux-tu mordre ?'); // La réponse est persistante
             const rel = await areRelated(guildId, authorId, target.id);
             let desc = `🦷 Nom ! ${formatMention(authorId)} a mordu ${formatMention(target.id)} !`;
             if (rel === 'conjoint(e)') desc = `🦷 ${formatMention(authorId)} donne un petit mordillement amoureux à ${formatMention(target.id)}...`;
             const embed = new EmbedBuilder().setColor('#8B0000').setDescription(desc).setImage('https://media.giphy.com/media/O9HeC68S69hPa/giphy.gif');
-            return message.reply({ embeds: [embed] });
+            return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
 
         case 'dance': {
-            if (!target) return message.reply('Avec qui veux-tu danser ?');
+            if (!target) return message.reply('Avec qui veux-tu danser ?'); // La réponse est persistante
             const desc = `💃 ${formatMention(authorId)} entraîne ${formatMention(target.id)} dans une danse endiablée !`;
             const embed = new EmbedBuilder().setColor('#FF69B4').setDescription(desc).setImage('https://media.giphy.com/media/1082yS2HMbLMSQ/giphy.gif');
-            return message.reply({ embeds: [embed] });
+            return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
 
         case 'cuddle': {
-            if (!target) return message.reply('Qui veux-tu câliner ?');
+            if (!target) return message.reply('Qui veux-tu câliner ?'); // La réponse est persistante
             const rel = await areRelated(guildId, authorId, target.id);
             let desc = `🧸 ${formatMention(authorId)} fait un câlin tout doux à ${formatMention(target.id)}.`;
             if (['enfant', 'parent'].includes(rel)) desc = `🧸 ${formatMention(authorId)} serre tendrement son **${rel}** contre lui.`;
             const embed = new EmbedBuilder().setColor('#DEB887').setDescription(desc).setImage('https://media.giphy.com/media/lrr96YS85KkNi/giphy.gif');
-            return message.reply({ embeds: [embed] });
+            return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
 
         case 'highfive': {
-            if (!target) return message.reply('À qui veux-tu taper m\'en cinq ?');
+            if (!target) return message.reply('À qui veux-tu taper m\'en cinq ?'); // La réponse est persistante
             const desc = `🙌 ${formatMention(authorId)} et ${formatMention(target.id)} se tapent m'en cinq ! Quel duo !`;
             const embed = new EmbedBuilder().setColor('#00FF7F').setDescription(desc).setImage('https://media.giphy.com/media/26ufgSwMRqauQWqL6/giphy.gif');
-            return message.reply({ embeds: [embed] });
+            return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
 
         case 'handhold': {
-            if (!target) return message.reply('À qui veux-tu tenir la main ?');
+            if (!target) return message.reply('À qui veux-tu tenir la main ?'); // La réponse est persistante
             const rel = await areRelated(guildId, authorId, target.id);
             let desc = `🤝 ${formatMention(authorId)} prend la main de ${formatMention(target.id)}.`;
             if (rel === 'conjoint(e)') desc = `🤝 ${formatMention(authorId)} tient amoureusement la main de ${formatMention(target.id)}.`;
             const embed = new EmbedBuilder().setColor('#F0E68C').setDescription(desc).setImage('https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHpueG8ycWV6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/6YfMIn9680i9G/giphy.gif');
-            return message.reply({ embeds: [embed] });
+            return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
     }
 });
@@ -1431,11 +1465,16 @@ client.on('interactionCreate', async (interaction) => {
     const guildId = interaction.guildId;
     
     if (interaction.customId === 'modal_create_fam') {
-        const name = interaction.fields.getTextInputValue('fam_name').toLowerCase(); // name is familyName
-        if (await db.getFamily(guildId, name)) return interaction.reply({ content: "❌ Nom déjà pris.", flags: MessageFlags.Ephemeral });
-        await db.createFamily(guildId, name, interaction.user.id);
-        await db.updateUser(guildId, interaction.user.id, { familyName: name });
-        await interaction.reply({ content: `🎉 Famille **${name.toUpperCase()}** fondée !` });
+        try {
+            const name = interaction.fields.getTextInputValue('fam_name').toLowerCase(); // name is familyName
+            if (await db.getFamily(guildId, name)) return interaction.reply({ content: "❌ Nom déjà pris.", flags: MessageFlags.Ephemeral });
+            await db.createFamily(guildId, name, interaction.user.id);
+            await db.updateUser(guildId, interaction.user.id, { familyName: name });
+            await interaction.reply({ content: `🎉 Famille **${name.toUpperCase()}** fondée !` });
+        } catch (err) {
+            console.error("Erreur création famille via modal:", err);
+            await interaction.reply({ embeds: [errorEmbed("Une erreur est survenue lors de la création de la famille.")], flags: MessageFlags.Ephemeral });
+        }
     }
 
     if (interaction.customId === 'modal_bio') {
