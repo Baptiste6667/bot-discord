@@ -57,6 +57,8 @@ const formatMention = (id) => `<@${id}>`;
 const errorEmbed = (text) => new EmbedBuilder().setColor('#ff4757').setDescription(`❌ ${text}`);
 const successEmbed = (text) => new EmbedBuilder().setColor('#2ed573').setDescription(`✅ ${text}`);
 const clearUserFamilyLinks = async (guildId, userId) => await db.clearUserFamilyLinksDB(guildId, userId);
+const safeDelete = (msg) => msg && typeof msg.delete === 'function' ? msg.delete().catch(() => {}) : null;
+const autoDelete = (msg, time = 30000) => setTimeout(() => safeDelete(msg), time);
 
 // --- UnbelievaBoat API Helper ---
 // Configuration de l'instance Axios pour communiquer directement avec l'API v1
