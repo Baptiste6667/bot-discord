@@ -27,20 +27,25 @@ async function connectDB() {
 }
 
 async function getOrCreateUser(userId) {
+  const defaults = {
+    spouse: null,
+    children: [],
+    mother: null,
+    father: null,
+    customLinks: {},
+    familyName: null,
+    bio: "",
+    gender: null
+  };
+
   let user = await usersCollection.findOne({ _id: userId });
+  
   if (!user) {
-    user = {
-      _id: userId,
-      spouse: null,
-      children: [],
-      mother: null,
-      father: null,
-      customLinks: {},
-      familyName: null,
-      bio: "",
-      gender: null
-    };
+    user = { _id: userId, ...defaults };
     await usersCollection.insertOne(user);
+  } else {
+    // Protection contre les anciennes données : on fusionne avec les valeurs par défaut
+    user = { ...defaults, ...user };
   }
   return user;
 }
