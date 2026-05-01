@@ -1117,8 +1117,7 @@ client.on('messageCreate', async (message) => {
                     { name: '💍 Interactions', value: `\`${PREFIX}marry <@User>\` : Mariage.\n\`${PREFIX}divorce\`, \`${PREFIX}hug\`, \`${PREFIX}kiss\`, \`${PREFIX}pat\`, \`${PREFIX}slap\`, \`${PREFIX}tickle\`, \`${PREFIX}dance\`, \`${PREFIX}cuddle\`, \`${PREFIX}bite\`, \`${PREFIX}highfive\`, \`${PREFIX}handhold\`` },
                     { name: '⚙️ Administration', value: `\`${PREFIX}adminfamily <Nom>\` : Outils de gestion forcée.\n\`${PREFIX}resetdb\` : Réinitialisation complète des données du serveur (Admin uniquement).` }
                 );
-            const sentHelp = await message.channel.send({ embeds: [h] });
-            return autoDelete(sentHelp, 60000);
+            return message.channel.send({ embeds: [h] });
         }
 
         case 'marry': {
