@@ -73,73 +73,96 @@ async function updateUBBalance(guildId, userId, cashDelta) {
 
 // --- Visual Tree Generator ---
 async function generateFamilyImage(client, userId) {
-    const canvas = createCanvas(800, 450); // Canvas size
+    const canvas = createCanvas(800, 500); 
     const ctx = canvas.getContext('2d');
     const userData = await db.getOrCreateUser(userId); // Fetch user data from DB
+    const family = userData.familyName ? await db.getFamily(userData.familyName) : null;
     
-    ctx.fillStyle = '#2c2f33';
-    ctx.fillRect(0, 0, 800, 450);
+    // Fond sombre élégant
+    ctx.fillStyle = '#1e2124';
+    ctx.fillRect(0, 0, 800, 500);
     
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
-    ctx.font = 'bold 14px sans-serif';
-
-    const drawNode = async (id, x, y, color = '#7289da') => {
+    const drawNode = async (id, x, y, roleText, color = '#7289da') => {
         if (!id) return;
         const user = client.users.cache.get(id) || (typeof id === 'string' ? await client.users.fetch(id).catch(() => null) : null);
         const name = (user ? user.username : id)?.toString() || "Inconnu";
+        const isHead = family?.head === id;
 
-        ctx.fillStyle = color;
+        // Ombre portée
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = 'rgba(0,0,0,0.4)';
+        
+        // Boîte du membre
+        ctx.fillStyle = isHead ? '#faa61a' : color; // Doré pour le chef
         ctx.beginPath();
-        ctx.roundRect(x - 85, y - 25, 170, 50, 12);
+        ctx.roundRect(x - 90, y - 35, 180, 70, 15);
         ctx.fill();
+        ctx.shadowBlur = 0;
 
         if (user) {
             try {
-                const avatar = await loadImage(user.displayAvatarURL({ extension: 'png', size: 64 }));
+                const avatar = await loadImage(user.displayAvatarURL({ extension: 'png', size: 128 }));
                 ctx.save();
                 ctx.beginPath();
-                ctx.arc(x - 55, y, 20, 0, Math.PI * 2);
-                ctx.closePath();
+                ctx.arc(x - 50, y, 25, 0, Math.PI * 2);
                 ctx.clip();
-                ctx.drawImage(avatar, x - 75, y - 20, 40, 40);
+                ctx.drawImage(avatar, x - 75, y - 25, 50, 50);
                 ctx.restore();
                 
+                // Nom
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'left';
-                ctx.fillText(name.substring(0, 12), x - 28, y + 5);
+                ctx.font = 'bold 15px sans-serif';
+                ctx.fillText(name.substring(0, 11), x - 15, y - 5);
+                
+                // Rôle
+                ctx.font = 'italic 12px sans-serif';
+                ctx.fillStyle = 'rgba(255,255,255,0.8)';
+                ctx.fillText((isHead ? "👑 " : "") + roleText, x - 15, y + 15);
             } catch (err) {
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'center';
-                ctx.fillText(name.substring(0, 15), x, y + 5);
+                ctx.font = 'bold 15px sans-serif';
+                ctx.fillText(name.substring(0, 15), x, y);
             }
         } else {
             ctx.fillStyle = '#ffffff';
             ctx.textAlign = 'center';
-            ctx.fillText(name.substring(0, 15), x, y + 5);
+            ctx.font = 'bold 15px sans-serif';
+            ctx.fillText(name.substring(0, 15), x, y);
         }
     };
 
-    const centerX = 400, centerY = 225;
+    const centerX = 400, centerY = 250;
+    ctx.strokeStyle = '#ffffff';
+    ctx.lineWidth = 2;
 
+    // 1. Fils vers le conjoint
     if (userData.spouse) {
-        ctx.beginPath(); ctx.moveTo(centerX + 85, centerY); ctx.lineTo(centerX + 115, centerY); ctx.stroke();
-        await drawNode(userData.spouse, centerX + 200, centerY);
+        ctx.beginPath(); ctx.moveTo(centerX + 90, centerY); ctx.lineTo(centerX + 110, centerY); ctx.stroke();
+        await drawNode(userData.spouse, centerX + 200, centerY, "Conjoint(e)");
     }
+    
+    // 2. Fils vers les parents
     const parents = [userData.father, userData.mother].filter(p => !!p);
     for (let i = 0; i < parents.length; i++) {
-        const xPos = centerX - 100 + (i * 200);
-        ctx.beginPath(); ctx.moveTo(centerX, centerY - 25); ctx.lineTo(xPos, 100 + 25); ctx.stroke();
-        await drawNode(parents[i], xPos, 100);
+        const xPos = centerX - 120 + (i * 240);
+        const role = parents[i] === userData.father ? "Père" : "Mère";
+        ctx.beginPath(); ctx.moveTo(centerX, centerY - 35); ctx.lineTo(xPos, 100 + 35); ctx.stroke();
+        await drawNode(parents[i], xPos, 100, role);
     }
 
-    const children = (userData.children || []).slice(0, 3);
+    // 3. Fils vers les enfants
+    const children = (userData.children || []).slice(0, 5);
     for (let i = 0; i < children.length; i++) {
-        const xPos = 200 + (i * 200);
-        ctx.beginPath(); ctx.moveTo(centerX, centerY + 25); ctx.lineTo(xPos, 350 - 25); ctx.stroke();
-        await drawNode(children[i], xPos, 350);
+        // Distribution horizontale dynamique pour éviter les chevauchements
+        const xPos = centerX + (i - (children.length - 1) / 2) * (children.length > 1 ? 700 / (children.length - 1) : 0);
+        ctx.beginPath(); ctx.moveTo(centerX, centerY + 35); ctx.lineTo(xPos, 400 - 35); ctx.stroke();
+        await drawNode(children[i], xPos, 400, "Enfant");
     }
-    await drawNode(userId, centerX, centerY, '#faa61a');
+
+    // 4. Nœud central (Moi)
+    await drawNode(userId, centerX, centerY, "Moi", '#5865F2');
 
     return canvas.toBuffer();
 }
@@ -694,27 +717,31 @@ client.on('messageCreate', async (message) => {
 
         case 'family': {
             try {
-                if (args.length > 0) {
+                const isGlobalArg = args.some(a => ['global', 'lignée', 'toute'].includes(a.toLowerCase()));
+                const searchArgs = args.filter(a => !['global', 'lignée', 'toute'].includes(a.toLowerCase()));
+
+                if (searchArgs.length > 0) {
                     await message.channel.sendTyping();
                     
                     let targetId = message.mentions.users.first()?.id;
                     // Support de l'ID direct
-                    if (!targetId && args[0]?.match(/^\d{17,19}$/)) targetId = args[0];
+                    if (!targetId && searchArgs[0]?.match(/^\d{17,19}$/)) targetId = searchArgs[0];
 
                     let family = null;
-                    // Si on a un utilisateur (mention/ID), on cherche SA famille
                     if (targetId) {
                         const targetData = await db.getOrCreateUser(targetId);
                         if (targetData.familyName) family = await db.getFamily(targetData.familyName);
                     }
 
-                    // Sinon (ou si l'utilisateur n'a pas de famille), on cherche par nom
                     if (!family) {
-                        family = await db.getFamily(args.join(' '));
+                        family = await db.getFamily(searchArgs.join(' '));
                         if (family && !targetId) targetId = family.head;
                     }
 
                     if (!family || !targetId) return message.reply({ embeds: [errorEmbed("Famille introuvable (utilisez un nom, une mention ou un ID).")] });
+                    
+                    // Si c'est une demande de lignée complète, on part du chef
+                    if (isGlobalArg) targetId = family.head;
 
                     const [buffer, ext] = await Promise.all([
                         generateFamilyImage(client, targetId),
@@ -725,7 +752,7 @@ client.on('messageCreate', async (message) => {
                     const displayTitle = family._id.toUpperCase();
                     
                     const embed = new EmbedBuilder()
-                        .setTitle(`Généalogie de la Famille ${displayTitle}`)
+                        .setTitle(isGlobalArg ? `🌳 Lignée Complète : ${displayTitle}` : `🌿 Ma Branche : ${displayTitle}`)
                         .setColor('#5865F2')
                         .setImage('attachment://family.png')
                         .addFields(
@@ -761,6 +788,11 @@ client.on('messageCreate', async (message) => {
                 const isHead = family.head === authorId;
                 embed.setDescription(`Dynastie : **${authorData.familyName.toUpperCase()}**\nRang : ${isHead ? "Chef" : "Membre"}`);
                 
+                rows.push(new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId('view_branch').setLabel('Ma Branche').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId('view_global').setLabel('Lignée Complète').setStyle(ButtonStyle.Success)
+                ));
+
                 const menu = new StringSelectMenuBuilder().setCustomId('fam_action').setPlaceholder('Gérer...')
                     .addOptions([
                         { label: 'Ajouter un membre', value: 'add' },
@@ -775,10 +807,34 @@ client.on('messageCreate', async (message) => {
             }
 
             const msg = await message.reply({ embeds: [embed], components: rows });
-            const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['fam_action', 'create_fam', 'cancel_main'].includes(i.customId), time: 120000 });
+            const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['fam_action', 'create_fam', 'cancel_main', 'view_branch', 'view_global'].includes(i.customId), time: 120000 });
 
             collector.on('collect', async (i) => {
                 if (i.customId === 'cancel_main' || i.values?.[0] === 'cancel') return i.message.delete();
+                
+                if (i.customId === 'view_branch' || i.customId === 'view_global') {
+                    await i.deferUpdate();
+                    const family = await db.getFamily(authorData.familyName);
+                    const targetId = i.customId === 'view_global' ? family.head : authorId;
+                    
+                    const [buffer, ext] = await Promise.all([
+                        generateFamilyImage(client, targetId),
+                        getExtendedFamily(targetId)
+                    ]);
+                    
+                    const attachment = new AttachmentBuilder(buffer, { name: 'family.png' });
+                    const embed = new EmbedBuilder()
+                        .setTitle(i.customId === 'view_global' ? `🌳 Lignée Complète : ${family._id.toUpperCase()}` : `🌿 Ma Branche : ${family._id.toUpperCase()}`)
+                        .setColor('#5865F2')
+                        .setImage('attachment://family.png')
+                        .addFields(
+                            { name: '👑 Chef de Lignée', value: formatMention(family.head), inline: true },
+                            { name: '👫 Fratrie', value: Array.from(ext.siblings).map(formatMention).join(', ') || 'Aucun', inline: false },
+                            { name: '👴 Grands-parents', value: Array.from(ext.grandparents).map(formatMention).join(', ') || 'Aucun', inline: false }
+                        )
+                        .setTimestamp();
+                    return i.followUp({ embeds: [embed], files: [attachment] });
+                }
                 
                 if (i.customId === 'create_fam') {
                     const modal = new ModalBuilder().setCustomId('modal_create_fam').setTitle('Nouvelle Famille');
