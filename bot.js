@@ -913,7 +913,7 @@ client.on('messageCreate', async (message) => {
                 const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['fam_action', 'create_fam', 'cancel_main', 'view_branch', 'view_global'].includes(i.customId), time: 120000 });
                 
                 collector.on('collect', async (i) => {
-                    if (i.customId === 'cancel_main' || (i.isStringSelect() && i.values?.[0] === 'cancel')) {
+                    if (i.customId === 'cancel_main' || (i.isStringSelectMenu() && i.values?.[0] === 'cancel')) {
                         await i.deferUpdate();
                         return safeDelete(msg);
                     }
@@ -1514,7 +1514,7 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.customId === 'modal_create_fam') {
         try {
             // On diffère la réponse immédiatement pour éviter le timeout de 3 secondes de Discord
-            await interaction.deferReply({ ephemeral: true });
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
             const nameInput = interaction.fields.getTextInputValue('fam_name').trim();
             const name = nameInput.toLowerCase();
