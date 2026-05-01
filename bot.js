@@ -244,7 +244,7 @@ async function getExtendedFamily(guildId, userId) {
     const parentDataArray = await db.getUsersByIds(guildId, parents);
     
     for (const parentData of parentDataArray) {
-        for (const cId of (parentData.children || [])) {
+        for (const cId of (parentData?.children || [])) {
             if (cId !== userId) siblings.add(cId);
         }
         if (parentData.father) grandparents.add(parentData.father);
@@ -302,11 +302,11 @@ async function propagateNameChange(guildId, userId, oldName, newName) { // No lo
     const user = await db.getOrCreateUser(guildId, userId);
     if (!user) return;
 
-    for (const childId of user.children) {
+    for (const childId of (user.children || [])) {
         const child = await db.getOrCreateUser(guildId, childId);
         if (child && child.familyName === oldName) {
-            // Logique : On ne change le nom que si l'enfant n'est pas marié et n'a pas d'enfants
-            if (!child.spouse && child.children.length === 0) {
+            // Logique : On ne change le nom que si l'enfant n'est pas marié et n'a pas lui-même d'enfants
+            if (!child.spouse && (child.children || []).length === 0) {
                 await db.updateUser(guildId, childId, { familyName: newName });
                 // Mise à jour du registre de famille
                 const newFamily = await db.getFamily(guildId, newName);
@@ -658,7 +658,9 @@ client.on('messageCreate', async (message) => {
     // Seuls help, account, familytop et les interactions sociales restent affichés.
     const persistentCommands = ['help', 'account', 'familytop', 'marry', 'divorce', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold'];
 
-    // Fonction de suppression sécurisée
+    // Suppression automatique du message utilisateur si la commande n'est pas persistante
+    if (!persistentCommands.includes(command)) safeDelete(message);
+
     const safeDelete = (msg) => msg && typeof msg.delete === 'function' ? msg.delete().catch(() => {}) : null;
     
     const target = message.mentions.users.first();
@@ -670,8 +672,6 @@ client.on('messageCreate', async (message) => {
 
     switch (command) {
         case 'adminfamily': {
-            // On supprime le message de commande
-            safeDelete(message);
             const adminMsgTimeout = 30000; // Suppression après 30 secondes
             try {
                 if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
@@ -802,7 +802,6 @@ client.on('messageCreate', async (message) => {
         }
 
         case 'family': {
-            safeDelete(message);
             let embed = new EmbedBuilder().setColor("#5865F2");
             let rows = [];
             try {
@@ -1232,7 +1231,6 @@ client.on('messageCreate', async (message) => {
         }
 
         case 'resetdb': {
-            safeDelete(message);
             try {
                 if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
                     const res = await message.channel.send({ embeds: [errorEmbed("Seuls les administrateurs peuvent réinitialiser la base de données.")] });

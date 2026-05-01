@@ -19,6 +19,11 @@ async function connectDB() {
     db = client.db(); // Connects to the database specified in the URI (e.g., familyBotDB)
     usersCollection = db.collection('users');
     familiesCollection = db.collection('families');
+
+    // Création d'index pour booster les performances multi-guilde
+    await usersCollection.createIndex({ guildId: 1 });
+    await familiesCollection.createIndex({ guildId: 1 });
+
     console.log("🎉 Connecté à MongoDB Atlas !");
   } catch (error) {
     console.error("❌ Erreur de connexion à MongoDB Atlas :", error);
@@ -26,7 +31,8 @@ async function connectDB() {
   }
 }
 
-async function getOrCreateUser(userId) {
+async function getOrCreateUser(guildId, userId) {
+  const compositeId = `${guildId}_${userId}`;
   const defaults = {
     spouse: null,
     children: [],
@@ -38,10 +44,10 @@ async function getOrCreateUser(userId) {
     gender: null
   };
 
-  let user = await usersCollection.findOne({ _id: userId });
+  let user = await usersCollection.findOne({ _id: compositeId });
   
   if (!user) {
-    user = { _id: userId, ...defaults };
+    user = { _id: compositeId, guildId, userId, ...defaults };
     await usersCollection.insertOne(user);
   } else {
     // Protection contre les anciennes données : on fusionne avec les valeurs par défaut
@@ -50,86 +56,98 @@ async function getOrCreateUser(userId) {
   return user;
 }
 
-async function getUsersByIds(userIds) {
-  const users = await usersCollection.find({ _id: { $in: userIds } }).toArray();
+async function getUsersByIds(guildId, userIds) {
+  if (!userIds || userIds.length === 0) return [];
+  const compositeIds = userIds.map(id => `${guildId}_${id}`);
+  const users = await usersCollection.find({ _id: { $in: compositeIds } }).toArray();
   return users;
 }
 
-async function updateUser(userId, updateFields) {
-  await usersCollection.updateOne({ _id: userId }, { $set: updateFields });
+async function updateUser(guildId, userId, updateFields) {
+  await usersCollection.updateOne({ _id: `${guildId}_${userId}` }, { $set: updateFields });
 }
 
-async function getAllUsers() {
-  return (await usersCollection.find({}).toArray()).reduce((acc, user) => {
-    acc[user._id] = user;
+async function getAllUsers(guildId) {
+  return (await usersCollection.find({ guildId }).toArray()).reduce((acc, user) => {
+    acc[user.userId] = user;
     return acc;
   }, {});
 }
 
-async function getFamily(familyName) {
-  return familiesCollection.findOne({ _id: familyName.toLowerCase() });
+async function getFamily(guildId, familyName) {
+  if (!familyName) return null;
+  return familiesCollection.findOne({ _id: `${guildId}_${familyName.toLowerCase()}` });
 }
 
-async function createFamily(familyName, headId) {
+async function createFamily(guildId, familyName, headId) {
+  const compositeId = `${guildId}_${familyName.toLowerCase()}`;
   const family = {
-    _id: familyName.toLowerCase(),
+    _id: compositeId,
+    guildId,
+    familyName: familyName.toLowerCase(),
     head: headId,
-    members: [headId]
+    members: [headId],
+    createdAt: new Date()
   };
   await familiesCollection.insertOne(family);
   return family;
 }
 
-async function updateFamily(familyName, updateFields) {
-  await familiesCollection.updateOne({ _id: familyName.toLowerCase() }, { $set: updateFields });
+async function resetDatabase(guildId) {
+  await usersCollection.deleteMany({ guildId });
+  await familiesCollection.deleteMany({ guildId });
 }
 
-async function deleteFamily(familyName) {
-  await familiesCollection.deleteOne({ _id: familyName.toLowerCase() });
+async function updateFamily(guildId, familyName, updateFields) {
+  await familiesCollection.updateOne({ _id: `${guildId}_${familyName.toLowerCase()}` }, { $set: updateFields });
 }
 
-async function getAllFamilies() {
-  return (await familiesCollection.find({}).toArray()).reduce((acc, family) => {
-    acc[family._id] = family;
+async function deleteFamily(guildId, familyName) {
+  await familiesCollection.deleteOne({ _id: `${guildId}_${familyName.toLowerCase()}` });
+}
+
+async function getAllFamilies(guildId) {
+  return (await familiesCollection.find({ guildId }).toArray()).reduce((acc, family) => {
+    acc[family.familyName] = family;
     return acc;
   }, {});
 }
 
-async function clearUserFamilyLinksDB(userId) {
-  const userData = await getOrCreateUser(userId);
+async function clearUserFamilyLinksDB(guildId, userId) {
+  const userData = await getOrCreateUser(guildId, userId);
 
   if (userData.familyName) {
-    const family = await getFamily(userData.familyName);
+    const family = await getFamily(guildId, userData.familyName);
     if (family) {
       family.members = family.members.filter(id => id !== userId);
       if (family.head === userId) {
         if (family.members.length === 0) {
-          await deleteFamily(family._id);
+          await deleteFamily(guildId, family.familyName);
         } else {
             // Logique de succession optimisée
-            const membersData = await getUsersByIds(family.members);
+            const membersData = await getUsersByIds(guildId, family.members);
             const potentialHeads = membersData
                 .filter(mData => {
                     const hasParentInFamily = (mData.mother && family.members.includes(mData.mother)) || 
                                               (mData.father && family.members.includes(mData.father));
                     return !hasParentInFamily;
                 })
-                .map(mData => mData._id);
+                .map(mData => mData.userId);
             
             if (potentialHeads.length > 0) {
                 family.head = potentialHeads[Math.floor(Math.random() * potentialHeads.length)];
             } else {
                 family.head = family.members[Math.floor(Math.random() * family.members.length)];
             }
-            await updateFamily(family._id, { head: family.head, members: family.members });
+            await updateFamily(guildId, family.familyName, { head: family.head, members: family.members });
         }
       } else {
-        await updateFamily(family._id, { members: family.members });
+        await updateFamily(guildId, family.familyName, { members: family.members });
       }
     }
   }
 
-  await updateUser(userId, { spouse: null, children: [], mother: null, father: null, customLinks: {}, familyName: null });
+  await updateUser(guildId, userId, { spouse: null, children: [], mother: null, father: null, customLinks: {}, familyName: null });
 }
 
 module.exports = {
@@ -143,5 +161,6 @@ module.exports = {
   updateFamily,
   deleteFamily,
   getAllFamilies,
-  clearUserFamilyLinksDB
+  clearUserFamilyLinksDB,
+  resetDatabase
 };
