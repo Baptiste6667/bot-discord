@@ -106,8 +106,8 @@ async function generateFamilyImage(client, userId) {
 
     // Fonction robuste pour dessiner un rectangle arrondi (fallback manuel)
     const fillRoundedRect = (x, y, width, height, radius, color) => {
-        ctx.beginPath();
         ctx.save();
+        ctx.beginPath();
         ctx.fillStyle = color;
         ctx.moveTo(x + radius, y);
         ctx.lineTo(x + width - radius, y);
@@ -150,24 +150,24 @@ async function generateFamilyImage(client, userId) {
                 // Texte (On utilise l'alias 'FamilyTreeFont')
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'left';
-                ctx.font = '16px FamilyTreeFont';
+                ctx.font = 'bold 16px "FamilyTreeFont", Arial, sans-serif';
                 ctx.fillText(name.substring(0, 12), x - 15, y - 5);
                 
-                ctx.font = '13px FamilyTreeFont';
+                ctx.font = '13px "FamilyTreeFont", Arial, sans-serif';
                 ctx.fillStyle = '#ffffff';
                 ctx.fillText((isHead ? "👑 " : "") + roleText, x - 15, y + 15);
             } catch (err) {
                 console.error(`[DEBUG] Erreur chargement avatar/texte pour ${user.username}:`, err.message);
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'center';
-                ctx.font = '16px FamilyTreeFont';
+                ctx.font = 'bold 16px "FamilyTreeFont", Arial, sans-serif';
                 ctx.fillText(name.substring(0, 15), x, y);
             }
         } else {
             console.log(`[DEBUG] Utilisateur ${id} non trouvé dans le cache/fetch.`);
             ctx.fillStyle = '#ffffff';
             ctx.textAlign = 'center';
-            ctx.font = '16px FamilyTreeFont';
+            ctx.font = 'bold 16px "FamilyTreeFont", Arial, sans-serif';
             ctx.fillText(name.substring(0, 15), x, y);
         }
     };
@@ -179,16 +179,17 @@ async function generateFamilyImage(client, userId) {
         console.log(`[DEBUG] Dessin du titre pour la famille ${family._id}`);
         ctx.save();
         ctx.fillStyle = '#ffffff';
-        ctx.font = '26px FamilyTreeFont';
+        ctx.font = 'bold 26px "FamilyTreeFont", Arial, sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText(`Lignée des ${family._id.toUpperCase()}`, 400, 45);
         ctx.restore();
     }
 
+    // ÉTAPE 1 : Dessiner toutes les lignes d'abord
+    ctx.save();
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 3;
 
-    // ÉTAPE 1 : Dessiner toutes les lignes d'abord
     if (userData.spouse) {
         ctx.beginPath(); ctx.moveTo(centerX + 90, centerY); ctx.lineTo(centerX + 110, centerY); ctx.stroke();
     }
@@ -199,11 +200,12 @@ async function generateFamilyImage(client, userId) {
         ctx.beginPath(); ctx.moveTo(centerX, centerY - 35); ctx.lineTo(xPos, 130 + 35); ctx.stroke();
     }
 
-    const children = (userData.children || []).slice(0, 5);
-    for (let i = 0; i < children.length; i++) {
-        const xPos = centerX + (i - (children.length - 1) / 2) * (children.length > 1 ? 740 / (children.length - 1) : 0);
+    const childrenDataLines = (userData.children || []).slice(0, 5);
+    for (let i = 0; i < childrenDataLines.length; i++) {
+        const xPos = centerX + (i - (childrenDataLines.length - 1) / 2) * (childrenDataLines.length > 1 ? 740 / (childrenDataLines.length - 1) : 0);
         ctx.beginPath(); ctx.moveTo(centerX, centerY + 35); ctx.lineTo(xPos, 430 - 35); ctx.stroke();
     }
+    ctx.restore();
 
     // ÉTAPE 2 : Dessiner tous les nœuds par-dessus
     console.log("[DEBUG] Dessin des membres...");
@@ -214,7 +216,7 @@ async function generateFamilyImage(client, userId) {
     }
     const childrenData = (userData.children || []).slice(0, 5);
     for (let i = 0; i < childrenData.length; i++) {
-        const xPos = centerX + (i - (children.length - 1) / 2) * (children.length > 1 ? 740 / (children.length - 1) : 0);
+        const xPos = centerX + (i - (childrenData.length - 1) / 2) * (childrenData.length > 1 ? 740 / (childrenData.length - 1) : 0);
         await drawNode(childrenData[i], xPos, 430, "Enfant");
     }
     
