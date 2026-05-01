@@ -22,18 +22,31 @@ const {
     InteractionType,
     InteractionResponseType
 } = require('discord.js');
+const fs = require('fs');
 const { createCanvas, loadImage, registerFont } = require('canvas');
 const path = require('path');
 
 // Attempt to register a generic font for better compatibility
 try {
-    // Sur Render, on utilise le fichier font.ttf que tu as ajouté à ton GitHub
-    const fontPath = path.join(__dirname, 'font.ttf');
-    registerFont(fontPath, { family: 'FamilyFont' });
-    console.log("✅ Police FamilyFont enregistrée avec succès.");
+    const fontPath = path.resolve(__dirname, 'font.ttf');
+    const rootDir = path.dirname(fontPath);
+    
+    // Diagnostic pour t'aider à voir les fichiers sur Render via les logs
+    const files = fs.readdirSync(rootDir);
+    console.log("📂 Fichiers détectés dans le dossier du bot :", files.join(', '));
+
+    if (fs.existsSync(fontPath)) {
+        registerFont(fontPath, { family: 'FamilyFont' });
+        console.log(`✅ Police FamilyFont enregistrée avec succès depuis : ${fontPath}`);
+    } else {
+        console.warn(`⚠️ Fichier font.ttf introuvable !`);
+        console.log(`🔍 Chemin cherché : ${fontPath}`);
+        console.log("💡 Rappel : Le fichier doit être à la racine de ton GitHub, pas dans un sous-dossier.");
+    }
 } catch (e) {
-    console.warn("⚠️ Impossible d'enregistrer la police locale. Vérifie que font.ttf est à la racine.");
+    console.error("❌ Erreur lors de l'initialisation de la police :", e.message);
 }
+
 const axios = require('axios');
 
 require('dotenv').config();
@@ -135,22 +148,22 @@ async function generateFamilyImage(client, userId) {
                 // Texte (Utilisation de polices génériques pour compatibilité)
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'left';
-                ctx.font = 'bold 16px "FamilyFont"';
+                ctx.font = 'bold 16px "FamilyFont", Arial, sans-serif';
                 ctx.fillText(name.substring(0, 12), x - 15, y - 5);
                 
-                ctx.font = '13px "FamilyFont"';
+                ctx.font = '13px "FamilyFont", Arial, sans-serif';
                 ctx.fillStyle = '#ffffff';
                 ctx.fillText((isHead ? "👑 " : "") + roleText, x - 15, y + 15);
             } catch (err) {
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'center';
-                ctx.font = 'bold 16px "FamilyFont"';
+                ctx.font = 'bold 16px "FamilyFont", Arial, sans-serif';
                 ctx.fillText(name.substring(0, 15), x, y);
             }
         } else {
             ctx.fillStyle = '#ffffff';
             ctx.textAlign = 'center';
-            ctx.font = 'bold 16px "FamilyFont"';
+            ctx.font = 'bold 16px "FamilyFont", Arial, sans-serif';
             ctx.fillText(name.substring(0, 15), x, y);
         }
     };
@@ -160,7 +173,7 @@ async function generateFamilyImage(client, userId) {
     // Dessin du Titre
     if (family) {
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 26px "FamilyFont"';
+        ctx.font = 'bold 26px "FamilyFont", Arial, sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText(`Lignée des ${family._id.toUpperCase()}`, 400, 45);
     }
