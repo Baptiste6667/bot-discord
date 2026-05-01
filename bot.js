@@ -655,7 +655,8 @@ client.on('messageCreate', async (message) => {
     const authorData = await db.getOrCreateUser(guildId, authorId);
     
     // On définit les commandes dont on veut garder la trace (social et info)
-    const persistentCommands = ['help', 'account', 'familytop', 'marry', 'divorce', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold', 'info', 'listfamilies'];
+    // Seuls help, account et les interactions sociales (hug, kiss, marry...) restent.
+    const persistentCommands = ['help', 'account', 'familytop', 'marry', 'divorce', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold'];
 
     // Fonction de suppression sécurisée
     const safeDelete = (msg) => msg && typeof msg.delete === 'function' ? msg.delete().catch(() => {}) : null;
@@ -900,7 +901,10 @@ client.on('messageCreate', async (message) => {
                 const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['fam_action', 'create_fam', 'cancel_main', 'view_branch', 'view_global'].includes(i.customId), time: 120000 });
                 
                 collector.on('collect', async (i) => {
-                    if (i.customId === 'cancel_main' || i.values?.[0] === 'cancel') return i.message.delete();
+                    if (i.customId === 'cancel_main' || i.values?.[0] === 'cancel') {
+                        await i.deferUpdate();
+                        return i.message.delete().catch(() => {});
+                    }
 
                     if (i.customId === 'view_branch' || i.customId === 'view_global') {
                     await i.deferUpdate();
@@ -1021,7 +1025,8 @@ client.on('messageCreate', async (message) => {
                     if (msg) await msg.edit({ embeds: [errorEmbed("Action annulée ou temps écoulé.")], components: [] }).catch(() => {});
                 }
             });
-                collector.on('end', () => { if (msg) msg.delete().catch(() => {}); });
+                // Suppression automatique du menu à la fin (temps écoulé ou fermeture)
+                collector.on('end', (collected, reason) => { if (msg) msg.delete().catch(() => {}); });
             } catch (err) {
                 console.error("Erreur commande family (dashboard):", err);
                 return message.reply({ embeds: [errorEmbed("Une erreur est survenue lors de l'affichage de la famille.")] });
@@ -1476,11 +1481,20 @@ client.on('interactionCreate', async (interaction) => {
     
     if (interaction.customId === 'modal_create_fam') {
         try {
-            const name = interaction.fields.getTextInputValue('fam_name').toLowerCase(); // name is familyName
-            if (await db.getFamily(guildId, name)) return interaction.reply({ content: "❌ Nom déjà pris.", flags: MessageFlags.Ephemeral });
+            const rawName = interaction.fields.getTextInputValue('fam_name');
+            const name = rawName.trim().toLowerCase();
+            console.log(`[DEBUG] Tentative de création famille: "${name}" sur serveur: ${guildId}`);
+
+            if (await db.getFamily(guildId, name)) {
+                return interaction.reply({ content: `❌ Le nom "**${name.toUpperCase()}**" est déjà utilisé sur ce serveur.`, flags: MessageFlags.Ephemeral });
+            }
+
             await db.createFamily(guildId, name, interaction.user.id);
             await db.updateUser(guildId, interaction.user.id, { familyName: name });
-            await interaction.reply({ content: `🎉 Famille **${name.toUpperCase()}** fondée !` });
+            
+            const successMsg = await interaction.reply({ embeds: [successEmbed(`Famille **${name.toUpperCase()}** fondée !`) ], fetchReply: true });
+            // Auto-suppression du message de succès après 10 secondes
+            setTimeout(() => successMsg.delete().catch(() => {}), 10000);
         } catch (err) {
             console.error("Erreur création famille via modal:", err);
             await interaction.reply({ embeds: [errorEmbed("Une erreur est survenue lors de la création de la famille.")], flags: MessageFlags.Ephemeral });
