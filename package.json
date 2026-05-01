@@ -4,13 +4,15 @@
   "description": "Bot Discord de gestion de dynastie",
   "main": "bot.js",
   "scripts": {
-    "start": "node bot.js"
+    "start": "node bot.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
   },
   "dependencies": {
-    "discord.js": "^14.16.3",
-    "canvas": "^2.11.2",
     "axios": "^1.7.7",
+    "canvas": "^2.11.2",
+    "discord.js": "^14.16.3",
     "dotenv": "^16.4.5",
+    "http": "^0.0.1-security",
     "mongodb": "^6.8.0"
   },
   "engines": {
