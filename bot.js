@@ -126,14 +126,14 @@ async function generateFamilyImage(client, userId) {
         ctx.beginPath(); ctx.moveTo(centerX + 85, centerY); ctx.lineTo(centerX + 115, centerY); ctx.stroke();
         await drawNode(userData.spouse, centerX + 200, centerY);
     }
-    const parents = [userData.father, userData.mother].filter(p => p !== null);
+    const parents = [userData.father, userData.mother].filter(p => !!p);
     for (let i = 0; i < parents.length; i++) {
         const xPos = centerX - 100 + (i * 200);
         ctx.beginPath(); ctx.moveTo(centerX, centerY - 25); ctx.lineTo(xPos, 100 + 25); ctx.stroke();
         await drawNode(parents[i], xPos, 100);
     }
 
-    const children = userData.children.slice(0, 3);
+    const children = (userData.children || []).slice(0, 3);
     for (let i = 0; i < children.length; i++) {
         const xPos = 200 + (i * 200);
         ctx.beginPath(); ctx.moveTo(centerX, centerY + 25); ctx.lineTo(xPos, 350 - 25); ctx.stroke();
@@ -152,11 +152,11 @@ async function getExtendedFamily(userId) {
     const unclesAunts = new Set();
     const cousins = new Set();
 
-    const parents = [user.father, user.mother].filter(p => p !== null);
+    const parents = [user.father, user.mother].filter(p => !!p);
     const parentDataArray = await db.getUsersByIds(parents);
     
     for (const parentData of parentDataArray) {
-        for (const cId of parentData.children) {
+        for (const cId of (parentData.children || [])) {
             if (cId !== userId) siblings.add(cId);
         }
         if (parentData.father) grandparents.add(parentData.father);
@@ -166,7 +166,7 @@ async function getExtendedFamily(userId) {
     const gpDataArray = await db.getUsersByIds(Array.from(grandparents));
     const uaIds = [];
     for (const gpData of gpDataArray) {
-        for (const childId of gpData.children) {
+        for (const childId of (gpData.children || [])) {
             if (!parents.includes(childId)) {
                 unclesAunts.add(childId);
                 uaIds.push(childId);
@@ -176,7 +176,7 @@ async function getExtendedFamily(userId) {
 
     const uaDataArray = await db.getUsersByIds(uaIds);
     for (const uaData of uaDataArray) {
-        for (const cousinId of uaData.children) {
+        for (const cousinId of (uaData.children || [])) {
             cousins.add(cousinId);
         }
     }
@@ -515,8 +515,10 @@ async function sendInvitation(interaction, author, target, role, action, fromVot
         );
     }
 
-    const method = (interaction.replied || interaction.deferred) ? 'editReply' : 'reply';
-    const msg = await interaction[method]({ content: `${target}`, embeds: [inviteEmbed], components: [row] });
+    // Sécurité accrue pour déterminer si on doit utiliser reply ou editReply
+    const msg = (interaction.replied || interaction.deferred) 
+        ? await interaction.editReply({ content: `${target}`, embeds: [inviteEmbed], components: [row] })
+        : await interaction.reply({ content: `${target}`, embeds: [inviteEmbed], components: [row], fetchReply: true });
 
     const collector = (msg || await interaction.fetchReply()).createMessageComponentCollector({ componentType: ComponentType.Button, time: 300000 });
     
@@ -561,12 +563,18 @@ client.on('messageCreate', async (message) => {
     const command = args.shift().toLowerCase();
     const authorId = message.author.id;
     const authorData = await db.getOrCreateUser(authorId);
+    
+    // On définit les commandes dont on veut garder la trace (social et info)
+    const persistentCommands = ['family', 'info', 'familytop', 'account', 'marry', 'divorce', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold'];
+    
+    // On ne supprime le message que si ce n'est pas une commande persistante
+    if (!persistentCommands.includes(command)) message.delete().catch(() => {});
 
     const target = message.mentions.users.first();
-    if (['adminfamily', 'family', 'account', 'info'].includes(command)) {
-        await message.channel.sendTyping();
-    }
+    const commandsToType = ['adminfamily', 'family', 'account', 'info'];
+    if (commandsToType.includes(command)) await message.channel.sendTyping();
 
+    const autoDelete = (msg, time = 30000) => setTimeout(() => msg.delete().catch(() => {}), time);
     let response = null;
 
     switch (command) {
@@ -685,56 +693,62 @@ client.on('messageCreate', async (message) => {
         }
 
         case 'family': {
-            if (args.length > 0) {
-                await message.channel.sendTyping();
-                
-                let targetId = message.mentions.users.first()?.id;
-                // Support de l'ID direct
-                if (!targetId && args[0]?.match(/^\d{17,19}$/)) targetId = args[0];
+            try {
+                if (args.length > 0) {
+                    await message.channel.sendTyping();
+                    
+                    let targetId = message.mentions.users.first()?.id;
+                    // Support de l'ID direct
+                    if (!targetId && args[0]?.match(/^\d{17,19}$/)) targetId = args[0];
 
-                let family = null;
-                // Si on a un utilisateur (mention/ID), on cherche SA famille
-                if (targetId) {
-                    const targetData = await db.getOrCreateUser(targetId);
-                    if (targetData.familyName) family = await db.getFamily(targetData.familyName);
+                    let family = null;
+                    // Si on a un utilisateur (mention/ID), on cherche SA famille
+                    if (targetId) {
+                        const targetData = await db.getOrCreateUser(targetId);
+                        if (targetData.familyName) family = await db.getFamily(targetData.familyName);
+                    }
+
+                    // Sinon (ou si l'utilisateur n'a pas de famille), on cherche par nom
+                    if (!family) {
+                        family = await db.getFamily(args.join(' '));
+                        if (family && !targetId) targetId = family.head;
+                    }
+
+                    if (!family || !targetId) return message.reply({ embeds: [errorEmbed("Famille introuvable (utilisez un nom, une mention ou un ID).")] });
+
+                    const [buffer, ext] = await Promise.all([
+                        generateFamilyImage(client, targetId),
+                        getExtendedFamily(targetId)
+                    ]);
+
+                    const attachment = new AttachmentBuilder(buffer, { name: 'family.png' });
+                    const displayTitle = family._id.toUpperCase();
+                    
+                    const embed = new EmbedBuilder()
+                        .setTitle(`Généalogie de la Famille ${displayTitle}`)
+                        .setColor('#5865F2')
+                        .setImage('attachment://family.png')
+                        .addFields(
+                            { name: '👑 Chef de Lignée', value: family ? formatMention(family.head) : 'Inconnu', inline: true },
+                            { name: '👥 Membres', value: family ? family.members.length.toString() : '1', inline: true },
+                            { name: '👫 Fratrie', value: Array.from(ext.siblings).map(formatMention).join(', ') || 'Aucun', inline: false },
+                            { name: '👴 Grands-parents', value: Array.from(ext.grandparents).map(formatMention).join(', ') || 'Aucun', inline: false },
+                            { name: '👨‍👩‍👧‍👦 Oncles & Tantes', value: Array.from(ext.unclesAunts).map(formatMention).join(', ') || 'Aucun', inline: false },
+                            { name: '🧒 Cousins', value: Array.from(ext.cousins).map(formatMention).join(', ') || 'Aucun', inline: false }
+                        )
+                        .setFooter({ text: `Consulté par ${message.author.username}` })
+                        .setTimestamp();
+
+                    return message.reply({ embeds: [embed], files: [attachment] });
                 }
 
-                // Sinon (ou si l'utilisateur n'a pas de famille), on cherche par nom
-                if (!family) {
-                    family = await db.getFamily(args.join(' '));
-                    if (family && !targetId) targetId = family.head;
-                }
-
-                if (!family || !targetId) return message.reply({ embeds: [errorEmbed("Famille introuvable (utilisez un nom, une mention ou un ID).")] });
-
-                const [buffer, ext] = await Promise.all([
-                    generateFamilyImage(client, targetId),
-                    getExtendedFamily(targetId)
-                ]);
-
-                const attachment = new AttachmentBuilder(buffer, { name: 'family.png' });
-                const displayTitle = family._id.toUpperCase();
-                
-                const embed = new EmbedBuilder()
-                    .setTitle(`Généalogie de la Famille ${displayTitle}`)
-                    .setColor('#5865F2')
-                    .setImage('attachment://family.png')
-                    .addFields(
-                        { name: '👑 Chef de Lignée', value: family ? formatMention(family.head) : 'Inconnu', inline: true },
-                        { name: '👥 Membres', value: family ? family.members.length.toString() : '1', inline: true },
-                        { name: '👫 Fratrie', value: Array.from(ext.siblings).map(formatMention).join(', ') || 'Aucun', inline: false },
-                        { name: '👴 Grands-parents', value: Array.from(ext.grandparents).map(formatMention).join(', ') || 'Aucun', inline: false },
-                        { name: '👨‍👩‍👧‍👦 Oncles & Tantes', value: Array.from(ext.unclesAunts).map(formatMention).join(', ') || 'Aucun', inline: false },
-                        { name: '🧒 Cousins', value: Array.from(ext.cousins).map(formatMention).join(', ') || 'Aucun', inline: false }
-                    )
-                    .setFooter({ text: `Consulté par ${message.author.username}` })
-                    .setTimestamp();
-
-                return message.reply({ embeds: [embed], files: [attachment] });
+                const embed = new EmbedBuilder().setTitle("🏠 Gestion de Famille").setColor("#5865F2");
+                const rows = [];
+                // ... reste du code original ...
+            } catch (err) {
+                console.error("Erreur commande family:", err);
+                return message.reply({ embeds: [errorEmbed("Une erreur est survenue lors de la génération de l'arbre. Vérifiez les données de la famille.")] });
             }
-
-            const embed = new EmbedBuilder().setTitle("🏠 Gestion de Famille").setColor("#5865F2");
-            const rows = [];
 
             if (!authorData.familyName) {
                 embed.setDescription("Vous ne possédez pas de famille. Souhaitez-vous fonder votre propre lignée ?");
@@ -895,7 +909,6 @@ client.on('messageCreate', async (message) => {
                 const newEmbed = (i.customId === 'v_top') ? await showTop() : await showWealth(authorId, authorData);
                 await i.editReply({ embeds: [newEmbed] });
             });
-            coll.on('end', async (collected, reason) => { if (reason === 'time') await msg.delete().catch(() => {}); });
             return;
         }
 
@@ -912,7 +925,8 @@ client.on('messageCreate', async (message) => {
                     { name: '💍 Social', value: `\`${PREFIX}marry <@User>\` : Mariage.\n\`${PREFIX}divorce\`, \`${PREFIX}hug\`, \`${PREFIX}kiss\`, \`${PREFIX}pat\`, \`${PREFIX}slap\`, \`${PREFIX}tickle\`, \`${PREFIX}dance\`, \`${PREFIX}cuddle\`` },
                     { name: '�️ Admin', value: `\`${PREFIX}adminfamily <Nom>\` : Gestion de dynastie.` }
                 );
-            return message.reply({ embeds: [h] });
+            const sentHelp = await message.channel.send({ embeds: [h] });
+            return autoDelete(sentHelp, 60000);
         }
 
         case 'marry': {
@@ -1099,7 +1113,7 @@ client.on('messageCreate', async (message) => {
         case 'divorce': {
             if (!authorData.spouse) return message.reply('Tu n\'es pas marié(e).');
             await executeLinkChange(authorId, authorData.spouse, null, 'remove');
-            return message.reply(`💔 Tu as divorcé de ${formatMention(authorData.spouse)}.`);
+            return message.reply(`💔 ${formatMention(authorId)} a divorcé de ${formatMention(authorData.spouse)}.`);
         }
 
         case 'hug': {
