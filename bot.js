@@ -28,16 +28,12 @@ const path = require('path');
 
 // Attempt to register a generic font for better compatibility
 try {
-    const fontPath = path.join(__dirname, 'font.ttf');
-    const rootDir = path.dirname(fontPath);
-    
-    // Diagnostic pour t'aider à voir les fichiers sur Render via les logs
-    const files = fs.readdirSync(rootDir);
-    console.log("📂 Fichiers détectés dans le dossier du bot :", files.join(', '));
+    const fontPath = path.resolve(__dirname, 'font.ttf');
 
     if (fs.existsSync(fontPath)) {
-        registerFont(fontPath, { family: 'font' });
-        console.log(`✅ Police enregistrée (alias: font) depuis : ${fontPath}`);
+        // On utilise un nom de famille très explicite
+        registerFont(fontPath, { family: 'FamilyTreeFont' });
+        console.log(`✅ Police enregistrée (alias: FamilyTreeFont) depuis : ${fontPath}`);
     } else {
         console.warn(`⚠️ Fichier font.ttf introuvable !`);
         console.log(`🔍 Chemin cherché : ${fontPath}`);
@@ -109,9 +105,9 @@ async function generateFamilyImage(client, userId) {
 
     // Fonction robuste pour dessiner un rectangle arrondi (fallback manuel)
     const fillRoundedRect = (x, y, width, height, radius, color) => {
+        ctx.beginPath();
         ctx.save();
         ctx.fillStyle = color;
-        ctx.beginPath();
         ctx.moveTo(x + radius, y);
         ctx.lineTo(x + width - radius, y);
         ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
@@ -133,7 +129,7 @@ async function generateFamilyImage(client, userId) {
         const name = (user ? user.username : id)?.toString() || "Inconnu";
         const isHead = family?.head === id;
 
-        // Dessin du rectangle (plus d'ombre pour éviter les bugs Cairo)
+        // Dessin du rectangle
         fillRoundedRect(x - 90, y - 35, 180, 70, 15, isHead ? '#faa61a' : color);
 
         if (user) {
@@ -147,25 +143,25 @@ async function generateFamilyImage(client, userId) {
                 ctx.drawImage(avatar, x - 75, y - 25, 50, 50);
                 ctx.restore();
                 
-                // Texte (On utilise uniquement l'alias enregistré 'font')
+                // Texte (On utilise l'alias 'FamilyTreeFont')
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'left';
-                ctx.font = 'bold 16px font';
+                ctx.font = '16px FamilyTreeFont';
                 ctx.fillText(name.substring(0, 12), x - 15, y - 5);
                 
-                ctx.font = '13px font';
-                ctx.fillStyle = '#e0e0e0';
+                ctx.font = '13px FamilyTreeFont';
+                ctx.fillStyle = '#ffffff';
                 ctx.fillText((isHead ? "👑 " : "") + roleText, x - 15, y + 15);
             } catch (err) {
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'center';
-                ctx.font = 'bold 16px font';
+                ctx.font = '16px FamilyTreeFont';
                 ctx.fillText(name.substring(0, 15), x, y);
             }
         } else {
             ctx.fillStyle = '#ffffff';
             ctx.textAlign = 'center';
-            ctx.font = 'bold 16px font';
+            ctx.font = '16px FamilyTreeFont';
             ctx.fillText(name.substring(0, 15), x, y);
         }
     };
@@ -174,10 +170,12 @@ async function generateFamilyImage(client, userId) {
     
     // Dessin du Titre
     if (family) {
+        ctx.save();
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 26px font';
+        ctx.font = '26px FamilyTreeFont';
         ctx.textAlign = 'center';
         ctx.fillText(`Lignée des ${family._id.toUpperCase()}`, 400, 45);
+        ctx.restore();
     }
 
     ctx.strokeStyle = '#ffffff';
