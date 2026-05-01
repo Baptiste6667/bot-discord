@@ -73,31 +73,57 @@ async function updateUBBalance(guildId, userId, cashDelta) {
 
 // --- Visual Tree Generator ---
 async function generateFamilyImage(client, userId) {
-    const canvas = createCanvas(800, 500); 
+    const canvas = createCanvas(800, 550); 
     const ctx = canvas.getContext('2d');
     const userData = await db.getOrCreateUser(userId); // Fetch user data from DB
     const family = userData.familyName ? await db.getFamily(userData.familyName) : null;
     
     // Fond sombre élégant
     ctx.fillStyle = '#1e2124';
-    ctx.fillRect(0, 0, 800, 500);
+    ctx.fillRect(0, 0, 800, 550);
+
+    // Titre de la dynastie
+    if (family) {
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 26px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`Lignée des ${family._id.toUpperCase()}`, 400, 45);
+    }
     
     const drawNode = async (id, x, y, roleText, color = '#7289da') => {
         if (!id) return;
+        ctx.save();
+        
         const user = client.users.cache.get(id) || (typeof id === 'string' ? await client.users.fetch(id).catch(() => null) : null);
         const name = (user ? user.username : id)?.toString() || "Inconnu";
         const isHead = family?.head === id;
 
         // Ombre portée
-        ctx.shadowBlur = 10;
-        ctx.shadowColor = 'rgba(0,0,0,0.4)';
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = 'rgba(0,0,0,0.6)';
         
         // Boîte du membre
         ctx.fillStyle = isHead ? '#faa61a' : color; // Doré pour le chef
+        const rx = x - 90, ry = y - 35, rw = 180, rh = 70, rad = 15;
         ctx.beginPath();
-        ctx.roundRect(x - 90, y - 35, 180, 70, 15);
+        if (ctx.roundRect) {
+            ctx.roundRect(rx, ry, rw, rh, rad);
+        } else {
+            // Fallback manuel si roundRect n'existe pas dans node-canvas
+            ctx.moveTo(rx + rad, ry);
+            ctx.lineTo(rx + rw - rad, ry);
+            ctx.quadraticCurveTo(rx + rw, ry, rx + rw, ry + rad);
+            ctx.lineTo(rx + rw, ry + rh - rad);
+            ctx.quadraticCurveTo(rx + rw, ry + rh, rx + rw - rad, ry + rh);
+            ctx.lineTo(rx + rad, ry + rh);
+            ctx.quadraticCurveTo(rx, ry + rh, rx, ry + rh - rad);
+            ctx.lineTo(rx, ry + rad);
+            ctx.quadraticCurveTo(rx, ry, rx + rad, ry);
+            ctx.closePath();
+        }
         ctx.fill();
-        ctx.shadowBlur = 0;
+        
+        ctx.shadowBlur = 0; // On désactive l'ombre pour le texte et l'avatar
 
         if (user) {
             try {
@@ -105,6 +131,7 @@ async function generateFamilyImage(client, userId) {
                 ctx.save();
                 ctx.beginPath();
                 ctx.arc(x - 50, y, 25, 0, Math.PI * 2);
+                ctx.closePath();
                 ctx.clip();
                 ctx.drawImage(avatar, x - 75, y - 25, 50, 50);
                 ctx.restore();
@@ -112,30 +139,32 @@ async function generateFamilyImage(client, userId) {
                 // Nom
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'left';
-                ctx.font = 'bold 15px sans-serif';
-                ctx.fillText(name.substring(0, 11), x - 15, y - 5);
+                ctx.textBaseline = 'middle';
+                ctx.font = 'bold 16px sans-serif';
+                ctx.fillText(name.substring(0, 12), x - 15, y - 10);
                 
                 // Rôle
-                ctx.font = 'italic 12px sans-serif';
-                ctx.fillStyle = 'rgba(255,255,255,0.8)';
+                ctx.font = 'italic 13px sans-serif';
+                ctx.fillStyle = '#e0e0e0';
                 ctx.fillText((isHead ? "👑 " : "") + roleText, x - 15, y + 15);
             } catch (err) {
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'center';
-                ctx.font = 'bold 15px sans-serif';
+                ctx.textBaseline = 'middle';
                 ctx.fillText(name.substring(0, 15), x, y);
             }
         } else {
             ctx.fillStyle = '#ffffff';
             ctx.textAlign = 'center';
-            ctx.font = 'bold 15px sans-serif';
+            ctx.textBaseline = 'middle';
             ctx.fillText(name.substring(0, 15), x, y);
         }
+        ctx.restore();
     };
 
-    const centerX = 400, centerY = 250;
+    const centerX = 400, centerY = 280;
     ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 3;
 
     // 1. Fils vers le conjoint
     if (userData.spouse) {
@@ -146,19 +175,18 @@ async function generateFamilyImage(client, userId) {
     // 2. Fils vers les parents
     const parents = [userData.father, userData.mother].filter(p => !!p);
     for (let i = 0; i < parents.length; i++) {
-        const xPos = centerX - 120 + (i * 240);
+        const xPos = centerX - 130 + (i * 260);
         const role = parents[i] === userData.father ? "Père" : "Mère";
-        ctx.beginPath(); ctx.moveTo(centerX, centerY - 35); ctx.lineTo(xPos, 100 + 35); ctx.stroke();
-        await drawNode(parents[i], xPos, 100, role);
+        ctx.beginPath(); ctx.moveTo(centerX, centerY - 35); ctx.lineTo(xPos, 130 + 35); ctx.stroke();
+        await drawNode(parents[i], xPos, 130, role);
     }
 
     // 3. Fils vers les enfants
     const children = (userData.children || []).slice(0, 5);
     for (let i = 0; i < children.length; i++) {
-        // Distribution horizontale dynamique pour éviter les chevauchements
-        const xPos = centerX + (i - (children.length - 1) / 2) * (children.length > 1 ? 700 / (children.length - 1) : 0);
-        ctx.beginPath(); ctx.moveTo(centerX, centerY + 35); ctx.lineTo(xPos, 400 - 35); ctx.stroke();
-        await drawNode(children[i], xPos, 400, "Enfant");
+        const xPos = centerX + (i - (children.length - 1) / 2) * (children.length > 1 ? 740 / (children.length - 1) : 0);
+        ctx.beginPath(); ctx.moveTo(centerX, centerY + 35); ctx.lineTo(xPos, 430 - 35); ctx.stroke();
+        await drawNode(children[i], xPos, 430, "Enfant");
     }
 
     // 4. Nœud central (Moi)
@@ -975,11 +1003,11 @@ client.on('messageCreate', async (message) => {
                 .setThumbnail(client.user.displayAvatarURL())
                 .setDescription(`Gérez vos lignées et votre fortune via nos dashboards interactifs !\nPréfixe : \`${PREFIX}\``)
                 .addFields(
-                    { name: '🏠 Famille', value: `\`${PREFIX}family\` : Dashboard personnel.\n\`${PREFIX}family <Nom>\` : Voir l'arbre.` },
+                    { name: '🏠 Famille', value: `\`${PREFIX}family\` : Dashboard personnel.\n\`${PREFIX}family <Nom/ID> [global]\` : Arbre de branche ou de lignée complète.` },
                     { name: 'ℹ️ Profil', value: `\`${PREFIX}info [@User]\` : Fiche d'identité et personnalisation.` },
-                    { name: '💰 Fortune', value: `\`${PREFIX}account\` : Richesse du foyer et classement.` },
-                    { name: '💍 Social', value: `\`${PREFIX}marry <@User>\` : Mariage.\n\`${PREFIX}divorce\`, \`${PREFIX}hug\`, \`${PREFIX}kiss\`, \`${PREFIX}pat\`, \`${PREFIX}slap\`, \`${PREFIX}tickle\`, \`${PREFIX}dance\`, \`${PREFIX}cuddle\`` },
-                    { name: '�️ Admin', value: `\`${PREFIX}adminfamily <Nom>\` : Gestion de dynastie.` }
+                    { name: '💰 Économie', value: `\`${PREFIX}account\` : Fortune du foyer et classement des richesses.` },
+                    { name: '💍 Interactions', value: `\`${PREFIX}marry <@User>\` : Mariage.\n\`${PREFIX}divorce\`, \`${PREFIX}hug\`, \`${PREFIX}kiss\`, \`${PREFIX}pat\`, \`${PREFIX}slap\`, \`${PREFIX}tickle\`, \`${PREFIX}dance\`, \`${PREFIX}cuddle\`, \`${PREFIX}bite\`, \`${PREFIX}highfive\`, \`${PREFIX}handhold\`` },
+                    { name: '⚙️ Administration', value: `\`${PREFIX}adminfamily <Nom>\` : Outils de gestion forcée pour modérateurs.` }
                 );
             const sentHelp = await message.channel.send({ embeds: [h] });
             return autoDelete(sentHelp, 60000);
