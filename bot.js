@@ -73,57 +73,41 @@ async function updateUBBalance(guildId, userId, cashDelta) {
 
 // --- Visual Tree Generator ---
 async function generateFamilyImage(client, userId) {
-    const canvas = createCanvas(800, 550); 
+    const canvas = createCanvas(800, 550);
     const ctx = canvas.getContext('2d');
     const userData = await db.getOrCreateUser(userId); // Fetch user data from DB
     const family = userData.familyName ? await db.getFamily(userData.familyName) : null;
     
-    // Fond sombre élégant
+    // Fond
     ctx.fillStyle = '#1e2124';
     ctx.fillRect(0, 0, 800, 550);
 
-    // Titre de la dynastie
-    if (family) {
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 26px sans-serif';
-        ctx.textAlign = 'center';
-        ctx.fillText(`Lignée des ${family._id.toUpperCase()}`, 400, 45);
-    }
-    
+    // Fonction robuste pour dessiner un rectangle arrondi (fallback manuel)
+    const fillRoundedRect = (x, y, width, height, radius, color) => {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.moveTo(x + radius, y);
+        ctx.lineTo(x + width - radius, y);
+        ctx.quadraticCurveTo(x + width, y, x + width, y + radius);
+        ctx.lineTo(x + width, y + height - radius);
+        ctx.quadraticCurveTo(x + width, y + height, x + width - radius, y + height);
+        ctx.lineTo(x + radius, y + height);
+        ctx.quadraticCurveTo(x, y + height, x, y + height - radius);
+        ctx.lineTo(x, y + radius);
+        ctx.quadraticCurveTo(x, y, x + radius, y);
+        ctx.closePath();
+        ctx.fill();
+    };
+
     const drawNode = async (id, x, y, roleText, color = '#7289da') => {
         if (!id) return;
-        ctx.save();
         
         const user = client.users.cache.get(id) || (typeof id === 'string' ? await client.users.fetch(id).catch(() => null) : null);
         const name = (user ? user.username : id)?.toString() || "Inconnu";
         const isHead = family?.head === id;
 
-        // Ombre portée
-        ctx.shadowBlur = 12;
-        ctx.shadowColor = 'rgba(0,0,0,0.6)';
-        
-        // Boîte du membre
-        ctx.fillStyle = isHead ? '#faa61a' : color; // Doré pour le chef
-        const rx = x - 90, ry = y - 35, rw = 180, rh = 70, rad = 15;
-        ctx.beginPath();
-        if (ctx.roundRect) {
-            ctx.roundRect(rx, ry, rw, rh, rad);
-        } else {
-            // Fallback manuel si roundRect n'existe pas dans node-canvas
-            ctx.moveTo(rx + rad, ry);
-            ctx.lineTo(rx + rw - rad, ry);
-            ctx.quadraticCurveTo(rx + rw, ry, rx + rw, ry + rad);
-            ctx.lineTo(rx + rw, ry + rh - rad);
-            ctx.quadraticCurveTo(rx + rw, ry + rh, rx + rw - rad, ry + rh);
-            ctx.lineTo(rx + rad, ry + rh);
-            ctx.quadraticCurveTo(rx, ry + rh, rx, ry + rh - rad);
-            ctx.lineTo(rx, ry + rad);
-            ctx.quadraticCurveTo(rx, ry, rx + rad, ry);
-            ctx.closePath();
-        }
-        ctx.fill();
-        
-        ctx.shadowBlur = 0; // On désactive l'ombre pour le texte et l'avatar
+        // Dessin du rectangle (plus d'ombre pour éviter les bugs Cairo)
+        fillRoundedRect(x - 90, y - 35, 180, 70, 15, isHead ? '#faa61a' : color);
 
         if (user) {
             try {
@@ -136,60 +120,70 @@ async function generateFamilyImage(client, userId) {
                 ctx.drawImage(avatar, x - 75, y - 25, 50, 50);
                 ctx.restore();
                 
-                // Nom
+                // Texte (Utilisation de polices génériques pour compatibilité)
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'left';
-                ctx.textBaseline = 'middle';
-                ctx.font = 'bold 16px sans-serif';
-                ctx.fillText(name.substring(0, 12), x - 15, y - 10);
+                ctx.font = 'bold 16px Arial, sans-serif';
+                ctx.fillText(name.substring(0, 12), x - 15, y - 5);
                 
-                // Rôle
-                ctx.font = 'italic 13px sans-serif';
-                ctx.fillStyle = '#e0e0e0';
+                ctx.font = 'italic 13px Arial, sans-serif';
+                ctx.fillStyle = '#ffffff';
                 ctx.fillText((isHead ? "👑 " : "") + roleText, x - 15, y + 15);
             } catch (err) {
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'center';
-                ctx.textBaseline = 'middle';
+                ctx.font = 'bold 16px Arial, sans-serif';
                 ctx.fillText(name.substring(0, 15), x, y);
             }
         } else {
             ctx.fillStyle = '#ffffff';
             ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
+            ctx.font = 'bold 16px Arial, sans-serif';
             ctx.fillText(name.substring(0, 15), x, y);
         }
-        ctx.restore();
     };
 
     const centerX = 400, centerY = 280;
+    
+    // Dessin du Titre
+    if (family) {
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 26px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(`Lignée des ${family._id.toUpperCase()}`, 400, 45);
+    }
+
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 3;
 
-    // 1. Fils vers le conjoint
+    // ÉTAPE 1 : Dessiner toutes les lignes d'abord
     if (userData.spouse) {
         ctx.beginPath(); ctx.moveTo(centerX + 90, centerY); ctx.lineTo(centerX + 110, centerY); ctx.stroke();
-        await drawNode(userData.spouse, centerX + 200, centerY, "Conjoint(e)");
     }
     
-    // 2. Fils vers les parents
     const parents = [userData.father, userData.mother].filter(p => !!p);
     for (let i = 0; i < parents.length; i++) {
         const xPos = centerX - 130 + (i * 260);
-        const role = parents[i] === userData.father ? "Père" : "Mère";
         ctx.beginPath(); ctx.moveTo(centerX, centerY - 35); ctx.lineTo(xPos, 130 + 35); ctx.stroke();
-        await drawNode(parents[i], xPos, 130, role);
     }
 
-    // 3. Fils vers les enfants
     const children = (userData.children || []).slice(0, 5);
     for (let i = 0; i < children.length; i++) {
         const xPos = centerX + (i - (children.length - 1) / 2) * (children.length > 1 ? 740 / (children.length - 1) : 0);
         ctx.beginPath(); ctx.moveTo(centerX, centerY + 35); ctx.lineTo(xPos, 430 - 35); ctx.stroke();
-        await drawNode(children[i], xPos, 430, "Enfant");
     }
 
-    // 4. Nœud central (Moi)
+    // ÉTAPE 2 : Dessiner tous les nœuds par-dessus
+    if (userData.spouse) await drawNode(userData.spouse, centerX + 200, centerY, "Conjoint(e)");
+    for (let i = 0; i < parents.length; i++) {
+        const xPos = centerX - 130 + (i * 260);
+        await drawNode(parents[i], xPos, 130, parents[i] === userData.father ? "Père" : "Mère");
+    }
+    for (let i = 0; i < children.length; i++) {
+        const xPos = centerX + (i - (children.length - 1) / 2) * (children.length > 1 ? 740 / (children.length - 1) : 0);
+        await drawNode(children[i], xPos, 430, "Enfant");
+    }
+    
     await drawNode(userId, centerX, centerY, "Moi", '#5865F2');
 
     return canvas.toBuffer();
