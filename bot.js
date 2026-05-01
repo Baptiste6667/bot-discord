@@ -655,7 +655,7 @@ client.on('messageCreate', async (message) => {
     const authorData = await db.getOrCreateUser(guildId, authorId);
     
     // On définit les commandes dont on veut garder la trace (social et info)
-    // Seuls help, account et les interactions sociales (hug, kiss, marry...) restent.
+    // Seuls help, account et les interactions sociales restent. family, admin, info et listfamilies seront supprimés.
     const persistentCommands = ['help', 'account', 'familytop', 'marry', 'divorce', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold'];
 
     // Fonction de suppression sécurisée
@@ -670,16 +670,25 @@ client.on('messageCreate', async (message) => {
 
     switch (command) {
         case 'adminfamily': {
-            // Suppression du message de commande après un léger délai pour éviter les erreurs de reply
-            setTimeout(() => message.delete().catch(() => {}), 1000);
+            // On supprime le message de commande
+            safeDelete(message);
             const adminMsgTimeout = 30000; // Suppression après 30 secondes
             try {
-                if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) return autoDelete(await message.reply({ embeds: [errorEmbed("Admin uniquement.")] }), adminMsgTimeout);
+                if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                    const err = await message.channel.send({ embeds: [errorEmbed("Admin uniquement.")] });
+                    return autoDelete(err, 5000);
+                }
                 const familyName = args.join(' ');
-                if (!familyName) return autoDelete(await message.reply({ embeds: [errorEmbed(`Usage: ${PREFIX}adminfamily <Nom>`)] }), adminMsgTimeout);
+                if (!familyName) {
+                    const err = await message.channel.send({ embeds: [errorEmbed(`Usage: ${PREFIX}adminfamily <Nom>`)] });
+                    return autoDelete(err, 5000);
+                }
 
                 const family = await db.getFamily(guildId, familyName);
-                if (!family) return autoDelete(await message.reply({ embeds: [errorEmbed(`Famille "${familyName}" introuvable.`)] }), adminMsgTimeout);
+                if (!family) {
+                    const err = await message.channel.send({ embeds: [errorEmbed(`Famille "${familyName}" introuvable.`)] });
+                    return autoDelete(err, 5000);
+                }
 
                 const embed = new EmbedBuilder()
                 .setTitle(`🛠️ Admin : Famille ${familyName.toUpperCase()}`)
@@ -695,11 +704,11 @@ client.on('messageCreate', async (message) => {
             ];
             const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('admin_action').setPlaceholder('Action...').addOptions(options));
 
-                const msg = await message.reply({ embeds: [embed], components: [row] }); // Ce message sera supprimé par le collector.on('end')
+                const msg = await message.channel.send({ embeds: [embed], components: [row] });
                 const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && i.customId === 'admin_action', time: 120000 });
 
                 coll.on('collect', async (i) => {
-                    if (i.values[0] === 'cancel') return i.message.delete().catch(() => {});
+                    if (i.values[0] === 'cancel') return safeDelete(msg);
                     if (i.values[0] === 'clear') {
                     for (const mId of family.members) await db.updateUser(guildId, mId, { familyName: null, spouse: null, children: [], mother: null, father: null });
                     await db.deleteFamily(guildId, familyName);
@@ -738,18 +747,19 @@ client.on('messageCreate', async (message) => {
                     const targetData = await db.getOrCreateUser(guildId, targetId);
 
                     if (action === 'add' && targetData.familyName === family.familyName) {
-                        await autoDelete(await ui.followUp({ content: "❌ Cet utilisateur est déjà dans cette famille.", flags: MessageFlags.Ephemeral }), adminMsgTimeout);
-                        return msg.delete();
+                        await ui.followUp({ content: "❌ Cet utilisateur est déjà dans cette famille.", flags: MessageFlags.Ephemeral });
+                        return;
                     }
                     if ((action === 'remove' || action === 'modify') && targetData.familyName !== family.familyName) {
-                        await autoDelete(await ui.followUp({ content: "❌ Cet utilisateur n'est pas dans cette famille.", flags: MessageFlags.Ephemeral }), adminMsgTimeout);
-                        return msg.delete();
+                        await ui.followUp({ content: "❌ Cet utilisateur n'est pas dans cette famille.", flags: MessageFlags.Ephemeral });
+                        return;
                     }
 
                     if (action === 'remove') {
                         await db.clearUserFamilyLinksDB(guildId, targetId);
-                        await msg.delete().catch(() => {});
-                        return autoDelete(await ui.channel.send({ embeds: [successEmbed(`Membre <@${targetId}> retiré de la famille.`)] }), adminMsgTimeout);
+                        safeDelete(msg);
+                        const res = await ui.channel.send({ embeds: [successEmbed(`Membre <@${targetId}> retiré de la famille.`)] });
+                        return autoDelete(res, adminMsgTimeout);
                     }
 
                     const rMenu = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('role').setPlaceholder('Rôle...').addOptions(ROLES_LIST.map(r => ({ label: r, value: r }))));
@@ -780,19 +790,19 @@ client.on('messageCreate', async (message) => {
                     }
                 } catch (e) {
                     console.error("Erreur sélection membre admin:", e);
-                    await msg.edit({ embeds: [errorEmbed("Action annulée ou temps écoulé.")], components: [] }).catch(() => {});
+                    if (msg) await msg.edit({ embeds: [errorEmbed("Action annulée ou temps écoulé.")], components: [] }).catch(() => {});
                 }
             });
-                coll.on('end', () => msg.delete().catch(() => {}));
+                coll.on('end', () => safeDelete(msg));
             } catch (err) {
                 console.error("Erreur adminfamily:", err);
-                message.reply({ embeds: [errorEmbed("Une erreur critique est survenue dans la commande admin.")] });
+                message.channel.send({ embeds: [errorEmbed("Une erreur critique est survenue dans la commande admin.")] });
             }
             return;
         }
 
         case 'family': {
-            if (!persistentCommands.includes(command)) setTimeout(() => message.delete().catch(() => {}), 1000);
+            safeDelete(message);
             let embed = new EmbedBuilder().setColor("#5865F2");
             let rows = [];
             try {
@@ -853,7 +863,9 @@ client.on('messageCreate', async (message) => {
                         .setFooter({ text: `Consulté par ${message.author.username}` })
                         .setTimestamp();
 
-                    return message.reply({ embeds: [embed], files: [attachment] });
+                    const sentFam = await message.channel.send({ embeds: [embed], files: [attachment] });
+                    // On supprime la réponse family après 60 secondes pour garder le salon propre (sauf si c'est une consultation directe)
+                    return autoDelete(sentFam, 60000);
                 }
 
                 embed.setTitle("🏠 Gestion de Famille");
@@ -862,7 +874,7 @@ client.on('messageCreate', async (message) => {
                     embed.setDescription("Vous ne possédez pas de famille. Souhaitez-vous fonder votre propre lignée ?");
                     rows.push(new ActionRowBuilder().addComponents(
                         new ButtonBuilder().setCustomId('create_fam').setLabel('Fonder une lignée').setStyle(ButtonStyle.Success),
-                        new ButtonBuilder().setCustomId('cancel_main').setLabel('Annuler').setStyle(ButtonStyle.Secondary)
+                        new ButtonBuilder().setCustomId('cancel_main').setLabel('Fermer').setStyle(ButtonStyle.Secondary)
                     ));
                 } else {
                     const family = await db.getFamily(guildId, authorData.familyName);
@@ -893,17 +905,17 @@ client.on('messageCreate', async (message) => {
                 if (isHead) menu.addOptions({ label: 'Dissoudre la famille', value: 'delete' }); // Option de dissolution pour le chef
                         menu.addOptions({ label: 'Annuler', value: 'cancel' });
                         rows.push(new ActionRowBuilder().addComponents(menu));
-                        rows.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('cancel_main').setLabel('Fermer').setStyle(ButtonStyle.Secondary)));
+                        rows.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('cancel_main').setLabel('Fermer le menu').setStyle(ButtonStyle.Secondary)));
                     }
                 }
 
-                const msg = await message.reply({ embeds: [embed], components: rows });
+                const msg = await message.channel.send({ embeds: [embed], components: rows });
                 const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['fam_action', 'create_fam', 'cancel_main', 'view_branch', 'view_global'].includes(i.customId), time: 120000 });
                 
                 collector.on('collect', async (i) => {
                     if (i.customId === 'cancel_main' || i.values?.[0] === 'cancel') {
                         await i.deferUpdate();
-                        return i.message.delete().catch(() => {});
+                        return safeDelete(msg);
                     }
 
                     if (i.customId === 'view_branch' || i.customId === 'view_global') {
@@ -952,10 +964,23 @@ client.on('messageCreate', async (message) => {
                     const confirm = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('confirm_del').setLabel('Confirmer la dissolution').setStyle(ButtonStyle.Danger));
                     return i.update({ content: "⚠️ Dissoudre la famille ?", components: [confirm] });
                 }
+                
+                if (i.customId === 'confirm_del') {
+                    await i.deferUpdate();
+                    const family = await db.getFamily(guildId, authorData.familyName);
+                    if (family) {
+                        for (const mId of family.members) {
+                            await db.updateUser(guildId, mId, { familyName: null, spouse: null, children: [], mother: null, father: null, customLinks: {} });
+                        }
+                        await db.deleteFamily(guildId, family.familyName);
+                        safeDelete(msg);
+                        return i.channel.send({ embeds: [successEmbed(`La famille **${family.familyName.toUpperCase()}** a été dissoute.`)] });
+                    }
+                }
 
                 if (action === 'leave') {
-                    await clearUserFamilyLinks(authorId);
-                    await i.message.delete();
+                    await clearUserFamilyLinks(guildId, authorId);
+                    safeDelete(msg);
                     return i.channel.send(`👋 ${message.author} a quitté sa famille.`);
                 }
 
@@ -1025,11 +1050,11 @@ client.on('messageCreate', async (message) => {
                     if (msg) await msg.edit({ embeds: [errorEmbed("Action annulée ou temps écoulé.")], components: [] }).catch(() => {});
                 }
             });
-                // Suppression automatique du menu à la fin (temps écoulé ou fermeture)
-                collector.on('end', (collected, reason) => { if (msg) msg.delete().catch(() => {}); });
+                // Suppression du dashboard à l'expiration
+                collector.on('end', (collected, reason) => { if (reason === 'time') safeDelete(msg); });
             } catch (err) {
                 console.error("Erreur commande family (dashboard):", err);
-                return message.reply({ embeds: [errorEmbed("Une erreur est survenue lors de l'affichage de la famille.")] });
+                return message.channel.send({ embeds: [errorEmbed("Une erreur est survenue lors de l'affichage de la famille.")] });
             }
             return;
         }
@@ -1207,10 +1232,11 @@ client.on('messageCreate', async (message) => {
         }
 
         case 'resetdb': {
-            setTimeout(() => message.delete().catch(() => {}), 1000);
+            safeDelete(message);
             try {
                 if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
-                    return autoDelete(await message.reply({ embeds: [errorEmbed("Seuls les administrateurs peuvent réinitialiser la base de données.")] }), 10000);
+                    const res = await message.channel.send({ embeds: [errorEmbed("Seuls les administrateurs peuvent réinitialiser la base de données.")] });
+                    return autoDelete(res, 10000);
                 }
 
                 const resetEmbed = new EmbedBuilder()
@@ -1223,24 +1249,21 @@ client.on('messageCreate', async (message) => {
                 new ButtonBuilder().setCustomId('cancel_reset').setLabel('Annuler').setStyle(ButtonStyle.Secondary)
             );
 
-            const msg = await message.reply({ embeds: [resetEmbed], components: [resetRow] });
+            const msg = await message.channel.send({ embeds: [resetEmbed], components: [resetRow] });
             const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
 
             collector.on('collect', async (i) => {
                 if (i.customId === 'confirm_reset') {
                     await db.resetDatabase(guildId);
                     await i.update({ embeds: [successEmbed("La base de données de ce serveur a été entièrement réinitialisée.")], components: [] });
-                    autoDelete(msg, 10000);
                 } else {
                     await i.update({ embeds: [errorEmbed("Action annulée.")], components: [] });
-                    autoDelete(msg, 5000);
                 }
+                autoDelete(msg, 5000);
                 collector.stop();
             });
 
-            collector.on('end', (collected, reason) => {
-                if (reason === 'time' && collected.size === 0) msg.delete().catch(() => {});
-            });
+            collector.on('end', (collected, reason) => { if (reason === 'time') safeDelete(msg); });
             } catch (err) {
                 console.error("Erreur resetdb:", err);
             }
