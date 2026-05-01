@@ -163,22 +163,24 @@ async function getExtendedFamily(userId) {
         if (parentData.mother) grandparents.add(parentData.mother);
     }
 
-    for (const parentData of parentDataArray) {
-        const gps = [parentData.father, parentData.mother].filter(gp => gp !== null);
-        const gpDataArray = await db.getUsersByIds(gps);
-        for (const gpData of gpDataArray) {
-            for (const siblingOfParentId of gpData.children) {
-                if (siblingOfParentId !== parentData._id) {
-                    unclesAunts.add(siblingOfParentId);
-                    // Cousins (children of uncles/aunts)
-                    const uaData = await db.getOrCreateUser(siblingOfParentId);
-                    for (const cousinId of uaData.children) {
-                        cousins.add(cousinId);
-                    }
-                }
+    const gpDataArray = await db.getUsersByIds(Array.from(grandparents));
+    const uaIds = [];
+    for (const gpData of gpDataArray) {
+        for (const childId of gpData.children) {
+            if (!parents.includes(childId)) {
+                unclesAunts.add(childId);
+                uaIds.push(childId);
             }
         }
     }
+
+    const uaDataArray = await db.getUsersByIds(uaIds);
+    for (const uaData of uaDataArray) {
+        for (const cousinId of uaData.children) {
+            cousins.add(cousinId);
+        }
+    }
+
     return { siblings, grandparents, unclesAunts, cousins };
 }
 
@@ -608,7 +610,14 @@ client.on('messageCreate', async (message) => {
                 if (action === 'add') {
                     targetSelectRow = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('target').setPlaceholder('Choisir le membre à ajouter...'));
                 } else {
-                    const memberOptions = await Promise.all(family.members.map(async (mId) => {
+                    // On ne propose pas le chef de famille pour modification/suppression via ce menu
+                    const filteredMembers = family.members.filter(mId => mId !== family.head);
+                    
+                    if (filteredMembers.length === 0) {
+                        return i.reply({ content: "❌ Cette famille ne contient aucun autre membre à modifier ou retirer.", flags: MessageFlags.Ephemeral });
+                    }
+
+                    const memberOptions = await Promise.all(filteredMembers.map(async (mId) => {
                         const user = client.users.cache.get(mId) || await client.users.fetch(mId).catch(() => null);
                         return { label: user ? user.username : mId, value: mId };
                     }));
@@ -636,7 +645,7 @@ client.on('messageCreate', async (message) => {
                     }
 
                     if (action === 'remove') {
-                        await executeLinkChange(family.head, targetId, null, 'remove');
+                        await db.clearUserFamilyLinksDB(targetId);
                         await msg.delete();
                         return ui.channel.send(`✅ Membre <@${targetId}> retiré de la famille.`);
                     }
@@ -685,16 +694,25 @@ client.on('messageCreate', async (message) => {
         case 'family': {
             if (args.length > 0) {
                 await message.channel.sendTyping();
-                const inputName = args.join(' ').toLowerCase();
+                
                 let targetId = message.mentions.users.first()?.id;
+                // Support de l'ID direct
+                if (!targetId && args[0]?.match(/^\d{17,19}$/)) targetId = args[0];
 
-                let family = await db.getFamily(inputName);
-                if (targetId && !family) {
+                let family = null;
+                // Si on a un utilisateur (mention/ID), on cherche SA famille
+                if (targetId) {
                     const targetData = await db.getOrCreateUser(targetId);
                     if (targetData.familyName) family = await db.getFamily(targetData.familyName);
                 }
-                if (!targetId && family) targetId = family.head;
-                else if (!targetId) return message.reply("❌ Famille introuvable.");
+
+                // Sinon (ou si l'utilisateur n'a pas de famille), on cherche par nom
+                if (!family) {
+                    family = await db.getFamily(args.join(' '));
+                    if (family && !targetId) targetId = family.head;
+                }
+
+                if (!family || !targetId) return message.reply({ embeds: [errorEmbed("Famille introuvable (utilisez un nom, une mention ou un ID).")] });
 
                 const [buffer, ext] = await Promise.all([
                     generateFamilyImage(client, targetId),
@@ -702,7 +720,7 @@ client.on('messageCreate', async (message) => {
                 ]);
 
                 const attachment = new AttachmentBuilder(buffer, { name: 'family.png' });
-                const displayTitle = family ? family._id.toUpperCase() : "Inconnue";
+                const displayTitle = family._id.toUpperCase();
                 
                 const embed = new EmbedBuilder()
                     .setTitle(`Généalogie de la Famille ${displayTitle}`)
@@ -778,7 +796,14 @@ client.on('messageCreate', async (message) => {
                     targetSelectRow = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('Choisir le futur membre...'));
                 } else {
                     const family = await db.getFamily(authorData.familyName);
-                    const memberOpts = await Promise.all(family.members.map(async (mId) => {
+                    // On ne propose pas l'auteur lui-même dans la liste des membres à gérer
+                    const filteredMembers = family.members.filter(mId => mId !== authorId);
+
+                    if (filteredMembers.length === 0) {
+                        return i.reply({ content: "❌ Votre famille ne contient aucun autre membre à gérer.", flags: MessageFlags.Ephemeral });
+                    }
+
+                    const memberOpts = await Promise.all(filteredMembers.map(async (mId) => {
                         const user = client.users.cache.get(mId) || await client.users.fetch(mId).catch(() => null);
                         return { label: user ? user.username : mId, value: mId };
                     }));
@@ -802,8 +827,8 @@ client.on('messageCreate', async (message) => {
                         return msg.delete();
                     }
 
-                    if (action === 'add' && targetData.familyName === authorData.familyName) {
-                        await ui.followUp({ content: "❌ Cet utilisateur est déjà dans votre famille.", flags: MessageFlags.Ephemeral });
+                    if (action === 'add' && (targetData.familyName === authorData.familyName || targetId === authorId)) {
+                        await ui.followUp({ content: "❌ Cet utilisateur fait déjà partie de votre famille ou c'est vous-même.", flags: MessageFlags.Ephemeral });
                         return msg.delete();
                     }
                     if ((action === 'remove' || action === 'modify') && targetData.familyName !== authorData.familyName) {
@@ -1009,7 +1034,13 @@ client.on('messageCreate', async (message) => {
         }
 
         case 'info': {
-            const targetUser = target || message.author;
+            let targetUser = target;
+            if (!targetUser && args[0]) {
+                // Tente de récupérer l'utilisateur par ID si aucune mention n'est présente
+                targetUser = client.users.cache.get(args[0]) || await client.users.fetch(args[0]).catch(() => null);
+            }
+            if (!targetUser) targetUser = message.author;
+
             const userData = await db.getOrCreateUser(targetUser.id);
             const family = userData.familyName ? await db.getFamily(userData.familyName) : null;
 
