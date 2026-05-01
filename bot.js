@@ -18,7 +18,8 @@ const {
     ModalBuilder,
     TextInputBuilder,
     TextInputStyle,
-    MessageFlags
+    MessageFlags,
+    InteractionType
 } = require('discord.js');
 const { createCanvas, loadImage } = require('canvas');
 const axios = require('axios');
@@ -33,14 +34,11 @@ const ROLES_LIST = [
     'grand-père', 'grand-mère'
 ];
 
-// Clears all family links for a given user
-async function clearUserFamilyLinks(userId) {
-    await db.clearUserFamilyLinksDB(userId);
-}
-
-function formatMention(id) {
-    return `<@${id}>`;
-}
+/** --- UTILITAIRES --- **/
+const formatMention = (id) => `<@${id}>`;
+const errorEmbed = (text) => new EmbedBuilder().setColor('#ff4757').setDescription(`❌ ${text}`);
+const successEmbed = (text) => new EmbedBuilder().setColor('#2ed573').setDescription(`✅ ${text}`);
+const clearUserFamilyLinks = async (userId) => await db.clearUserFamilyLinksDB(userId);
 
 // --- UnbelievaBoat API Helper ---
 // Configuration de l'instance Axios pour communiquer directement avec l'API v1
@@ -155,7 +153,7 @@ async function getExtendedFamily(userId) {
     const cousins = new Set();
 
     const parents = [user.father, user.mother].filter(p => p !== null);
-    const parentDataArray = await Promise.all(parents.map(pId => db.getOrCreateUser(pId)));
+    const parentDataArray = await db.getUsersByIds(parents);
     
     for (const parentData of parentDataArray) {
         for (const cId of parentData.children) {
@@ -167,7 +165,7 @@ async function getExtendedFamily(userId) {
 
     for (const parentData of parentDataArray) {
         const gps = [parentData.father, parentData.mother].filter(gp => gp !== null);
-        const gpDataArray = await Promise.all(gps.map(gpId => db.getOrCreateUser(gpId)));
+        const gpDataArray = await db.getUsersByIds(gps);
         for (const gpData of gpDataArray) {
             for (const siblingOfParentId of gpData.children) {
                 if (siblingOfParentId !== parentData._id) {
@@ -200,6 +198,8 @@ async function getReverseRole(role, targetData = null) { // Made async as target
         'beau-fils': 'beau-parent', 'belle-fille': 'beau-parent',
         'amoureux': gender === 'féminin' ? 'amoureuse' : 'amoureux',
         'amoureuse': gender === 'masculin' ? 'amoureux' : 'amoureuse',
+        'mari': gender === 'masculin' ? 'mari' : 'femme',
+        'femme': gender === 'féminin' ? 'femme' : 'mari',
         'père': gender === 'féminin' ? 'fille' : (gender === 'masculin' ? 'fils' : 'enfant'),
         'mère': gender === 'féminin' ? 'fille' : (gender === 'masculin' ? 'fils' : 'enfant'),
         'enfant': gender === 'féminin' ? 'mère' : (gender === 'masculin' ? 'père' : 'père')
@@ -450,14 +450,17 @@ async function startFamilyVote(interaction, author, target, role, action) {
     );
 
     let voteMsg;
-    if (interaction.replied || interaction.deferred) {
-        voteMsg = await interaction.editReply({ embeds: [voteEmbed], components: [row], content: null });
-    } else {
-        voteMsg = await interaction.update({ embeds: [voteEmbed], components: [row], content: null });
-    }
-    let votesYes = new Set(), votesNo = new Set();
+    const payload = { embeds: [voteEmbed], components: [row], content: null };
+    
+    if (interaction.replied || interaction.deferred) voteMsg = await interaction.editReply(payload);
+    else voteMsg = await interaction.update(payload);
 
-    const collector = voteMsg.createMessageComponentCollector({ componentType: ComponentType.Button, time: 60000 });
+    let votesYes = new Set(), votesNo = new Set();
+    const collector = voteMsg.createMessageComponentCollector({ 
+        filter: (i) => !i.user.bot,
+        componentType: ComponentType.Button, 
+        time: 60000 
+    });
 
     collector.on('collect', async (i) => {
         if (i.customId === 'v_yes') { votesNo.delete(i.user.id); votesYes.add(i.user.id); }
@@ -505,7 +508,6 @@ async function sendInvitation(interaction, author, target, role, action, fromVot
             new ButtonBuilder().setCustomId('i_no').setLabel('Refuser').setStyle(ButtonStyle.Danger)
         );
     } else {
-        // If role is 'conjoint', only offer accept/refuse. No merge option.
         row = new ActionRowBuilder().addComponents( 
             new ButtonBuilder().setCustomId('i_ok').setLabel('Accepter').setStyle(ButtonStyle.Success),
             new ButtonBuilder().setCustomId('i_no').setLabel('Refuser').setStyle(ButtonStyle.Danger)
@@ -521,9 +523,7 @@ async function sendInvitation(interaction, author, target, role, action, fromVot
         if (i.user.id !== target.id) return i.reply({ content: "Ce n'est pas pour vous.", flags: MessageFlags.Ephemeral });
 
         if (i.customId === 'i_ok') {
-            if (targetData.familyName && authorData.familyName && targetData.familyName !== authorData.familyName) {
-                await clearUserFamilyLinks(target.id);
-            }
+            if (targetData.familyName && authorData.familyName && targetData.familyName !== authorData.familyName) await clearUserFamilyLinks(target.id);
             await executeLinkChange(author.id, target.id, role, action);
             if (authorData.familyName) {
                 const family = await db.getFamily(authorData.familyName);
@@ -582,16 +582,14 @@ client.on('messageCreate', async (message) => {
                 .setColor("#e74c3c")
                 .setDescription("Sélectionnez une action administrative.");
 
-            const row = new ActionRowBuilder().addComponents(
-                new StringSelectMenuBuilder().setCustomId('admin_action').setPlaceholder('Action...')
-                    .addOptions([
-                        { label: 'Ajouter un membre', value: 'add' },
-                        { label: 'Modifier un membre', value: 'modify' },
-                        { label: 'Supprimer un membre', value: 'remove' },
-                        { label: 'Réinitialiser la famille', value: 'clear' },
-                        { label: 'Fermer', value: 'cancel' }
-                    ])
-            );
+            const options = [
+                { label: 'Ajouter un membre', value: 'add' },
+                { label: 'Modifier un membre', value: 'modify' },
+                { label: 'Supprimer un membre', value: 'remove' },
+                { label: 'Réinitialiser la famille', value: 'clear' },
+                { label: 'Fermer', value: 'cancel' }
+            ];
+            const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('admin_action').setPlaceholder('Action...').addOptions(options));
 
             const msg = await message.reply({ embeds: [embed], components: [row] });
             const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && i.customId === 'admin_action', time: 120000 });
@@ -610,11 +608,11 @@ client.on('messageCreate', async (message) => {
                 if (action === 'add') {
                     targetSelectRow = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('target').setPlaceholder('Choisir le membre à ajouter...'));
                 } else {
-                    const options = await Promise.all(family.members.map(async (mId) => {
+                    const memberOptions = await Promise.all(family.members.map(async (mId) => {
                         const user = client.users.cache.get(mId) || await client.users.fetch(mId).catch(() => null);
                         return { label: user ? user.username : mId, value: mId };
                     }));
-                    targetSelectRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('target').setPlaceholder(`Choisir le membre à ${action === 'remove' ? 'retirer' : 'modifier'}...`).addOptions(options));
+                    targetSelectRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('target').setPlaceholder(`Choisir le membre à ${action === 'remove' ? 'retirer' : 'modifier'}...`).addOptions(memberOptions));
                 }
                 await i.update({ content: `Action: **${action}**. Sélectionnez le membre.`, components: [targetSelectRow] });
 
@@ -623,7 +621,7 @@ client.on('messageCreate', async (message) => {
                         filter: subI => subI.user.id === authorId && subI.customId === 'target', 
                         time: 60000 
                     });
-                    await ui.deferUpdate(); // Acquittement immédiat pour éviter le timeout de 3s
+                    await ui.deferUpdate();
 
                     const targetId = ui.values[0];
                     const targetData = await db.getOrCreateUser(targetId);
@@ -645,12 +643,14 @@ client.on('messageCreate', async (message) => {
 
                     const rMenu = new ActionRowBuilder().addComponents(
                         new StringSelectMenuBuilder().setCustomId('role').setPlaceholder('Rôle...')
-                            .addOptions(ROLES_LIST.map(r => ({ label: r, value: r }))),
+                            .addOptions(ROLES_LIST.map(r => ({ label: r, value: r })))
+                    );
+                    const rBtnRow = new ActionRowBuilder().addComponents(
                         new ButtonBuilder().setCustomId('cancel_role').setLabel('Annuler').setStyle(ButtonStyle.Danger)
                     );
                     
                     // On utilise editReply car l'interaction a été "deferred"
-                    await ui.editReply({ content: `Attribuer un rôle à <@${targetId}> :`, components: [rMenu] });
+                    await ui.editReply({ content: `Attribuer un rôle à <@${targetId}> :`, components: [rMenu, rBtnRow] });
 
                     try {
                         const ri = await i.message.awaitMessageComponent({ 
@@ -686,16 +686,13 @@ client.on('messageCreate', async (message) => {
             if (args.length > 0) {
                 await message.channel.sendTyping();
                 const inputName = args.join(' ').toLowerCase();
-                const targetUser = message.mentions.users.first();
-                let targetId = targetUser ? targetUser.id : null;
+                let targetId = message.mentions.users.first()?.id;
 
                 let family = await db.getFamily(inputName);
-                
                 if (targetId && !family) {
                     const targetData = await db.getOrCreateUser(targetId);
                     if (targetData.familyName) family = await db.getFamily(targetData.familyName);
                 }
-
                 if (!targetId && family) targetId = family.head;
                 else if (!targetId) return message.reply("❌ Famille introuvable.");
 
@@ -731,7 +728,7 @@ client.on('messageCreate', async (message) => {
             if (!authorData.familyName) {
                 embed.setDescription("Vous ne possédez pas de famille. Souhaitez-vous fonder votre propre lignée ?");
                 rows.push(new ActionRowBuilder().addComponents(
-                    new ButtonBuilder().setCustomId('create_fam').setLabel('Créer une famille').setStyle(ButtonStyle.Success),
+                    new ButtonBuilder().setCustomId('create_fam').setLabel('Fonder une lignée').setStyle(ButtonStyle.Success),
                     new ButtonBuilder().setCustomId('cancel_main').setLabel('Annuler').setStyle(ButtonStyle.Secondary)
                 ));
             } else {
@@ -781,11 +778,11 @@ client.on('messageCreate', async (message) => {
                     targetSelectRow = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('Choisir le futur membre...'));
                 } else {
                     const family = await db.getFamily(authorData.familyName);
-                    const options = await Promise.all(family.members.map(async (mId) => {
+                    const memberOpts = await Promise.all(family.members.map(async (mId) => {
                         const user = client.users.cache.get(mId) || await client.users.fetch(mId).catch(() => null);
                         return { label: user ? user.username : mId, value: mId };
                     }));
-                    targetSelectRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('u').setPlaceholder('Choisir le membre de la famille...').addOptions(options));
+                    targetSelectRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('u').setPlaceholder('Choisir le membre de la famille...').addOptions(memberOpts));
                 }
                 await i.update({ content: `Action : **${action}**.`, components: [targetSelectRow] });
 
@@ -817,14 +814,16 @@ client.on('messageCreate', async (message) => {
                     if (action === 'remove') return startFamilyVote(ui, message.author, targetUser, 'Aucun', 'remove');
 
                     const rMenu = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('r').setPlaceholder('Rôle...').addOptions(ROLES_LIST.map(r => ({ label: r, value: r }))));
-                    await ui.editReply({ content: `Rôle pour <@${targetUser.id}> :`, components: [rMenu] });
+                    const rCancel = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('c_r').setLabel('Annuler').setStyle(ButtonStyle.Danger));
+                    await ui.editReply({ content: `Rôle pour <@${targetUser.id}> :`, components: [rMenu, rCancel] });
 
                     const ri = await i.message.awaitMessageComponent({ 
-                        filter: subI => subI.user.id === authorId && subI.customId === 'r', 
-                        componentType: ComponentType.StringSelect, 
+                        filter: subI => subI.user.id === authorId && ['r', 'c_r'].includes(subI.customId), 
                         time: 60000 
                     });
                     await ri.deferUpdate();
+
+                    if (ri.customId === 'c_r') return msg.delete();
 
                     if (action === 'add') await sendInvitation(ri, message.author, targetUser, ri.values[0], 'add');
                     else await startFamilyVote(ri, message.author, targetUser, ri.values[0], 'modify');
@@ -851,17 +850,12 @@ client.on('messageCreate', async (message) => {
             const showTop = async () => {
                 const familyWealths = [];
                 const allUsers = await db.getAllUsers();
-                const processed = new Set();
-                for (const uId of Object.keys(allUsers)) {
-                    const uData = allUsers[uId];
-                    let cId = uData.spouse ? [uId, uData.spouse].sort()[0] : uId;
-                    if (processed.has(cId)) continue;
-                    processed.add(cId);
-                    const members = [uId];
-                    if (uData.spouse) members.push(uData.spouse);
-                    uData.children.forEach(id => members.push(id));
+                const families = await db.getAllFamilies();
+                
+                for (const fam of Object.values(families)) {
+                    const members = fam.members;
                     const res = await Promise.all(members.map(id => getUBUser(message.guild.id, id)));
-                    familyWealths.push({ headId: uId, total: res.reduce((acc, r) => acc + (r ? r.cash : 0), 0) });
+                    familyWealths.push({ headId: fam.head, total: res.reduce((acc, r) => acc + (r ? r.cash : 0), 0) });
                 }
                 familyWealths.sort((a, b) => b.total - a.total);
                 const embed = new EmbedBuilder().setTitle('🏆 Top des Familles').setColor('#ffd700');
@@ -897,7 +891,7 @@ client.on('messageCreate', async (message) => {
                     { name: '🏠 Famille', value: `\`${PREFIX}family\` : Dashboard personnel.\n\`${PREFIX}family <Nom>\` : Voir l'arbre.` },
                     { name: 'ℹ️ Profil', value: `\`${PREFIX}info [@User]\` : Fiche d'identité et personnalisation.` },
                     { name: '💰 Fortune', value: `\`${PREFIX}account\` : Richesse du foyer et classement.` },
-                    { name: '💍 Social', value: `\`${PREFIX}marry <@User>\` : Demander quelqu'un en mariage.\n\`${PREFIX}divorce\`, \`${PREFIX}hug\`, \`${PREFIX}kiss\`, \`${PREFIX}pat\`, \`${PREFIX}slap\`, \`${PREFIX}poke\`` },
+                    { name: '💍 Social', value: `\`${PREFIX}marry <@User>\` : Mariage.\n\`${PREFIX}divorce\`, \`${PREFIX}hug\`, \`${PREFIX}kiss\`, \`${PREFIX}pat\`, \`${PREFIX}slap\`, \`${PREFIX}tickle\`, \`${PREFIX}dance\`, \`${PREFIX}cuddle\`` },
                     { name: '�️ Admin', value: `\`${PREFIX}adminfamily <Nom>\` : Gestion de dynastie.` }
                 );
             return message.reply({ embeds: [h] });
@@ -925,11 +919,10 @@ client.on('messageCreate', async (message) => {
             );
 
             const msg = await message.reply({ content: `${formatMention(target.id)}`, embeds: [marryEmbed], components: [row] });
-
             const collector = msg.createMessageComponentCollector({
                 filter: i => i.user.id === target.id,
                 componentType: ComponentType.Button,
-                time: 60000 // 60 seconds
+                time: 60000
             });
 
             collector.on('collect', async (i) => {
@@ -947,6 +940,7 @@ client.on('messageCreate', async (message) => {
                     const authorHasFamily = !!currentAuthorData.familyName;
                     const targetHasFamily = !!currentTargetData.familyName;
 
+                    const adj = (currentAuthorData.gender === 'féminin' && currentTargetData.gender === 'féminin') ? 'mariées' : 'mariés';
                     let finalFamilyName = null;
 
                     if (!authorHasFamily && !targetHasFamily) {
@@ -958,7 +952,7 @@ client.on('messageCreate', async (message) => {
                         await db.updateUser(authorId, { familyName: newFamilyName });
                         await db.updateUser(target.id, { familyName: newFamilyName });
                         finalFamilyName = newFamilyName;
-                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant mariés et ont fondé la famille **${newFamilyName.toUpperCase()}** !`, ephemeral: false });
+                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant ${adj} et ont fondé la famille **${newFamilyName.toUpperCase()}** !` });
                     } else if (authorHasFamily && !targetHasFamily) {
                         // Scenario 2: Author has family, target does not - target joins author's family
                         await db.updateUser(target.id, { familyName: currentAuthorData.familyName });
@@ -968,7 +962,7 @@ client.on('messageCreate', async (message) => {
                             await db.updateFamily(authorFamily._id, { members: authorFamily.members });
                         }
                         finalFamilyName = currentAuthorData.familyName;
-                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant mariés ! ${formatMention(target.id)} a rejoint la famille **${currentAuthorData.familyName.toUpperCase()}** !`, ephemeral: false });
+                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant ${adj} ! ${formatMention(target.id)} a rejoint la famille **${currentAuthorData.familyName.toUpperCase()}** !` });
                     } else if (!authorHasFamily && targetHasFamily) {
                         // Scenario 3: Target has family, author does not - author joins target's family
                         await db.updateUser(authorId, { familyName: currentTargetData.familyName });
@@ -978,23 +972,22 @@ client.on('messageCreate', async (message) => {
                             await db.updateFamily(targetFamily._id, { members: targetFamily.members });
                         }
                         finalFamilyName = currentTargetData.familyName;
-                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant mariés ! ${formatMention(authorId)} a rejoint la famille **${currentTargetData.familyName.toUpperCase()}** !`, ephemeral: false });
+                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant ${adj} ! ${formatMention(authorId)} a rejoint la famille **${currentTargetData.familyName.toUpperCase()}** !` });
                     } else if (authorHasFamily && targetHasFamily && currentAuthorData.familyName !== currentTargetData.familyName) {
                         // Scenario 4: Both have different families - merge families
                         await mergeFamilies(currentAuthorData.familyName, currentTargetData.familyName, authorId, target.id, 'conjoint');
-                        finalFamilyName = currentAuthorData.familyName; // The invited family merges into the inviter's family
-                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant mariés et leurs familles ont fusionné en **${finalFamilyName.toUpperCase()}** !`, ephemeral: false });
-                    } else if (authorHasFamily && targetHasFamily && currentAuthorData.familyName === currentTargetData.familyName) {
-                        // Scenario 5: Both are in the same family but not married to each other
                         finalFamilyName = currentAuthorData.familyName;
-                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant mariés au sein de la famille **${finalFamilyName.toUpperCase()}** !`, ephemeral: false });
+                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant ${adj} et leurs familles ont fusionné en **${finalFamilyName.toUpperCase()}** !` });
+                    } else if (authorHasFamily && targetHasFamily && currentAuthorData.familyName === currentTargetData.familyName) {
+                        finalFamilyName = currentAuthorData.familyName;
+                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant ${adj} au sein de la famille **${finalFamilyName.toUpperCase()}** !` });
                     }
 
                     // Establish the spouse link
                     await executeLinkChange(authorId, target.id, 'conjoint', 'add');
                     await msg.delete(); // Delete the proposal message
                 } else if (i.customId === 'm_decline') {
-                    await i.followUp({ content: `😔 ${formatMention(target.id)} a refusé la demande en mariage de ${formatMention(authorId)}.`, ephemeral: false });
+                    await i.followUp({ content: `😔 ${formatMention(target.id)} a refusé la demande en mariage de ${formatMention(authorId)}.` });
                     await msg.delete(); // Delete the proposal message
                 }
                 collector.stop();
@@ -1151,6 +1144,55 @@ client.on('messageCreate', async (message) => {
             return message.reply({ embeds: [embed] });
         }
 
+        case 'tickle': {
+            if (!target) return message.reply('Qui veux-tu chatouiller ?');
+            const rel = await areRelated(authorId, target.id);
+            let desc = `🤣 ${formatMention(authorId)} chatouille ${formatMention(target.id)} jusqu'à ce qu'il/elle n'en puisse plus !`;
+            if (rel && rel !== 'soi-même') desc += ` Les rires en famille sont précieux !`;
+            const embed = new EmbedBuilder().setColor('#FFD700').setDescription(desc).setImage('https://media.giphy.com/media/v0reFosH7N8m4/giphy.gif');
+            return message.reply({ embeds: [embed] });
+        }
+
+        case 'bite': {
+            if (!target) return message.reply('Qui veux-tu mordre ?');
+            const rel = await areRelated(authorId, target.id);
+            let desc = `🦷 Nom ! ${formatMention(authorId)} a mordu ${formatMention(target.id)} !`;
+            if (rel === 'conjoint(e)') desc = `🦷 ${formatMention(authorId)} donne un petit mordillement amoureux à ${formatMention(target.id)}...`;
+            const embed = new EmbedBuilder().setColor('#8B0000').setDescription(desc).setImage('https://media.giphy.com/media/O9HeC68S69hPa/giphy.gif');
+            return message.reply({ embeds: [embed] });
+        }
+
+        case 'dance': {
+            if (!target) return message.reply('Avec qui veux-tu danser ?');
+            const desc = `💃 ${formatMention(authorId)} entraîne ${formatMention(target.id)} dans une danse endiablée !`;
+            const embed = new EmbedBuilder().setColor('#FF69B4').setDescription(desc).setImage('https://media.giphy.com/media/1082yS2HMbLMSQ/giphy.gif');
+            return message.reply({ embeds: [embed] });
+        }
+
+        case 'cuddle': {
+            if (!target) return message.reply('Qui veux-tu câliner ?');
+            const rel = await areRelated(authorId, target.id);
+            let desc = `🧸 ${formatMention(authorId)} fait un câlin tout doux à ${formatMention(target.id)}.`;
+            if (['enfant', 'parent'].includes(rel)) desc = `🧸 ${formatMention(authorId)} serre tendrement son **${rel}** contre lui.`;
+            const embed = new EmbedBuilder().setColor('#DEB887').setDescription(desc).setImage('https://media.giphy.com/media/lrr96YS85KkNi/giphy.gif');
+            return message.reply({ embeds: [embed] });
+        }
+
+        case 'highfive': {
+            if (!target) return message.reply('À qui veux-tu taper m\'en cinq ?');
+            const desc = `🙌 ${formatMention(authorId)} et ${formatMention(target.id)} se tapent m'en cinq ! Quel duo !`;
+            const embed = new EmbedBuilder().setColor('#00FF7F').setDescription(desc).setImage('https://media.giphy.com/media/26ufgSwMRqauQWqL6/giphy.gif');
+            return message.reply({ embeds: [embed] });
+        }
+
+        case 'handhold': {
+            if (!target) return message.reply('À qui veux-tu tenir la main ?');
+            const rel = await areRelated(authorId, target.id);
+            let desc = `🤝 ${formatMention(authorId)} prend la main de ${formatMention(target.id)}.`;
+            if (rel === 'conjoint(e)') desc = `🤝 ${formatMention(authorId)} tient amoureusement la main de ${formatMention(target.id)}.`;
+            const embed = new EmbedBuilder().setColor('#F0E68C').setDescription(desc).setImage('https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHpueG8ycWV6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/6YfMIn9680i9G/giphy.gif');
+            return message.reply({ embeds: [embed] });
+        }
     }
 });
 
