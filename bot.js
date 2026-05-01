@@ -32,8 +32,8 @@ try {
 
     if (fs.existsSync(fontPath)) {
         // On utilise un nom de famille très explicite
-        registerFont(fontPath, { family: 'FamilyTreeFont' });
-        console.log(`✅ Police enregistrée (alias: FamilyTreeFont) depuis : ${fontPath}`);
+        registerFont(fontPath, { family: 'MyCustomFont' });
+        console.log(`✅ Police enregistrée (alias: MyCustomFont) depuis : ${fontPath}`);
     } else {
         console.warn(`⚠️ Fichier font.ttf introuvable !`);
         console.log(`🔍 Chemin cherché : ${fontPath}`);
@@ -95,6 +95,7 @@ async function updateUBBalance(guildId, userId, cashDelta) {
 // --- Visual Tree Generator ---
 async function generateFamilyImage(client, userId) {
     console.log(`[DEBUG] Début génération image pour : ${userId}`);
+    // Augmenter la taille du canvas si nécessaire pour plus de membres ou un titre plus grand
     const canvas = createCanvas(800, 550);
     const ctx = canvas.getContext('2d');
     const userData = await db.getOrCreateUser(userId); // Fetch user data from DB
@@ -135,6 +136,7 @@ async function generateFamilyImage(client, userId) {
         fillRoundedRect(x - 90, y - 35, 180, 70, 15, isHead ? '#faa61a' : color);
 
         if (user) {
+            // Charger l'avatar
             const avatarUrl = user.displayAvatarURL({ extension: 'png', size: 128 });
             try {
                 console.log(`[DEBUG] Chargement avatar pour ${user.username}: ${avatarUrl}`);
@@ -147,28 +149,35 @@ async function generateFamilyImage(client, userId) {
                 ctx.drawImage(avatar, x - 75, y - 25, 50, 50);
                 ctx.restore();
                 
-                // Texte (On utilise l'alias 'FamilyTreeFont')
+                // Dessin du nom
+                ctx.save(); // Sauvegarder l'état pour le texte
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'left';
-                ctx.font = 'bold 16px "FamilyTreeFont", Arial, sans-serif';
+                ctx.font = '16px "MyCustomFont", sans-serif'; // Utiliser l'alias et un fallback générique
                 ctx.fillText(name.substring(0, 12), x - 15, y - 5);
                 
-                ctx.font = '13px "FamilyTreeFont", Arial, sans-serif';
+                // Dessin du rôle
+                ctx.font = '13px "MyCustomFont", sans-serif';
                 ctx.fillStyle = '#ffffff';
                 ctx.fillText((isHead ? "👑 " : "") + roleText, x - 15, y + 15);
+                ctx.restore(); // Restaurer l'état après le texte
             } catch (err) {
                 console.error(`[DEBUG] Erreur chargement avatar/texte pour ${user.username}:`, err.message);
+                ctx.save(); // Sauvegarder l'état pour le texte de fallback
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'center';
-                ctx.font = 'bold 16px "FamilyTreeFont", Arial, sans-serif';
+                ctx.font = '16px sans-serif'; // Fallback vers une police système générique
                 ctx.fillText(name.substring(0, 15), x, y);
+                ctx.restore(); // Restaurer l'état après le texte de fallback
             }
         } else {
             console.log(`[DEBUG] Utilisateur ${id} non trouvé dans le cache/fetch.`);
+            ctx.save(); // Sauvegarder l'état pour le texte
             ctx.fillStyle = '#ffffff';
             ctx.textAlign = 'center';
-            ctx.font = 'bold 16px "FamilyTreeFont", Arial, sans-serif';
+            ctx.font = '16px sans-serif'; // Fallback vers une police système générique
             ctx.fillText(name.substring(0, 15), x, y);
+            ctx.restore(); // Restaurer l'état après le texte
         }
     };
 
@@ -179,7 +188,7 @@ async function generateFamilyImage(client, userId) {
         console.log(`[DEBUG] Dessin du titre pour la famille ${family._id}`);
         ctx.save();
         ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 26px "FamilyTreeFont", Arial, sans-serif';
+        ctx.font = '26px "MyCustomFont", sans-serif'; // Utiliser l'alias et un fallback générique
         ctx.textAlign = 'center';
         ctx.fillText(`Lignée des ${family._id.toUpperCase()}`, 400, 45);
         ctx.restore();
@@ -202,7 +211,7 @@ async function generateFamilyImage(client, userId) {
 
     const childrenDataLines = (userData.children || []).slice(0, 5);
     for (let i = 0; i < childrenDataLines.length; i++) {
-        const xPos = centerX + (i - (childrenDataLines.length - 1) / 2) * (childrenDataLines.length > 1 ? 740 / (childrenDataLines.length - 1) : 0);
+        const xPos = centerX + (i - (childrenDataLines.length - 1) / 2) * (childrenDataLines.length > 1 ? 740 / (Math.max(1, childrenDataLines.length - 1)) : 0); // Éviter division par zéro
         ctx.beginPath(); ctx.moveTo(centerX, centerY + 35); ctx.lineTo(xPos, 430 - 35); ctx.stroke();
     }
     ctx.restore();
@@ -216,7 +225,7 @@ async function generateFamilyImage(client, userId) {
     }
     const childrenData = (userData.children || []).slice(0, 5);
     for (let i = 0; i < childrenData.length; i++) {
-        const xPos = centerX + (i - (childrenData.length - 1) / 2) * (childrenData.length > 1 ? 740 / (childrenData.length - 1) : 0);
+        const xPos = centerX + (i - (childrenData.length - 1) / 2) * (childrenData.length > 1 ? 740 / (Math.max(1, childrenData.length - 1)) : 0); // Éviter division par zéro
         await drawNode(childrenData[i], xPos, 430, "Enfant");
     }
     
