@@ -515,7 +515,7 @@ async function sendInvitation(interaction, author, target, role, action, fromVot
         );
     }
 
-    const method = interaction.replied ? 'editReply' : 'reply';
+    const method = (interaction.replied || interaction.deferred) ? 'editReply' : 'reply';
     const msg = await interaction[method]({ content: `${target}`, embeds: [inviteEmbed], components: [row] });
 
     const collector = (msg || await interaction.fetchReply()).createMessageComponentCollector({ componentType: ComponentType.Button, time: 300000 });
@@ -598,7 +598,7 @@ client.on('messageCreate', async (message) => {
             coll.on('collect', async (i) => {
                 if (i.values[0] === 'cancel') return i.message.delete();
                 if (i.values[0] === 'clear') {
-                    for (const mId of family.members) await db.updateUser(mId, { familyName: null, spouse: null, children: [], parents: [] });
+                    for (const mId of family.members) await db.updateUser(mId, { familyName: null, spouse: null, children: [], mother: null, father: null });
                     await db.deleteFamily(familyName);
                     await i.message.delete();
                     return i.channel.send(`✅ Famille **${familyName.toUpperCase()}** supprimée.`);
