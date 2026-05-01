@@ -810,10 +810,17 @@ client.on('messageCreate', async (message) => {
                     // Si c'est une demande de lignée complète, on part du chef
                     if (isGlobalArg) targetId = family.head;
 
-                    const [buffer, ext] = await Promise.all([
+                    const [buffer, ext, targetData, membersWealth] = await Promise.all([
                         generateFamilyImage(client, targetId),
-                        getExtendedFamily(targetId)
+                        getExtendedFamily(targetId),
+                        db.getOrCreateUser(targetId),
+                        Promise.all(family.members.map(id => getUBUser(message.guild.id, id)))
                     ]);
+
+                    const totalWealth = membersWealth.reduce((acc, res) => acc + (res ? res.cash : 0), 0);
+                    const spouseText = targetData.spouse ? formatMention(targetData.spouse) : 'Célibataire';
+                    const parentsText = [targetData.father, targetData.mother].filter(p => !!p).map(formatMention).join(', ') || 'Inconnus';
+                    const childrenText = (targetData.children || []).map(formatMention).join(', ') || 'Aucun';
 
                     const attachment = new AttachmentBuilder(buffer, { name: 'family.png' });
                     const displayTitle = family._id.toUpperCase();
@@ -823,12 +830,12 @@ client.on('messageCreate', async (message) => {
                         .setColor('#5865F2')
                         .setImage('attachment://family.png')
                         .addFields(
-                            { name: '👑 Chef de Lignée', value: family ? formatMention(family.head) : 'Inconnu', inline: true },
-                            { name: '👥 Membres', value: family ? family.members.length.toString() : '1', inline: true },
-                            { name: '👫 Fratrie', value: Array.from(ext.siblings).map(formatMention).join(', ') || 'Aucun', inline: false },
-                            { name: '👴 Grands-parents', value: Array.from(ext.grandparents).map(formatMention).join(', ') || 'Aucun', inline: false },
-                            { name: '👨‍👩‍👧‍👦 Oncles & Tantes', value: Array.from(ext.unclesAunts).map(formatMention).join(', ') || 'Aucun', inline: false },
-                            { name: '🧒 Cousins', value: Array.from(ext.cousins).map(formatMention).join(', ') || 'Aucun', inline: false }
+                            { name: '👑 Chef de Lignée', value: formatMention(family.head), inline: true },
+                            { name: '👥 Population', value: `${family.members.length} membre(s)`, inline: true },
+                            { name: '💰 Fortune Totale', value: `**${totalWealth.toLocaleString()}** cr.`, inline: true },
+                            { name: '💍 Union', value: spouseText, inline: true },
+                            { name: '👨‍👩‍👧 Lignée Directe', value: `**Parents:** ${parentsText}\n**Enfants:** ${childrenText}`, inline: false },
+                            { name: '🌳 Parenté Étendue', value: `**Fratrie:** ${Array.from(ext.siblings).map(formatMention).join(', ') || 'Aucun'} | **Grands-Parents:** ${Array.from(ext.grandparents).map(formatMention).join(', ') || 'Aucun'} | **Oncles/Tantes:** ${Array.from(ext.unclesAunts).map(formatMention).join(', ') || 'Aucun'} | **Cousins:** ${Array.from(ext.cousins).map(formatMention).join(', ') || 'Aucun'}`, inline: false }
                         )
                         .setFooter({ text: `Consulté par ${message.author.username}` })
                         .setTimestamp();
@@ -883,10 +890,17 @@ client.on('messageCreate', async (message) => {
                     const family = await db.getFamily(authorData.familyName);
                     const targetId = i.customId === 'view_global' ? family.head : authorId;
                     
-                    const [buffer, ext] = await Promise.all([
+                    const [buffer, ext, targetData, membersWealth] = await Promise.all([
                         generateFamilyImage(client, targetId),
-                        getExtendedFamily(targetId)
+                        getExtendedFamily(targetId),
+                        db.getOrCreateUser(targetId),
+                        Promise.all(family.members.map(id => getUBUser(i.guild.id, id)))
                     ]);
+
+                    const totalWealth = membersWealth.reduce((acc, res) => acc + (res ? res.cash : 0), 0);
+                    const spouseText = targetData.spouse ? formatMention(targetData.spouse) : 'Célibataire';
+                    const parentsText = [targetData.father, targetData.mother].filter(p => !!p).map(formatMention).join(', ') || 'Inconnus';
+                    const childrenText = (targetData.children || []).map(formatMention).join(', ') || 'Aucun';
                     
                     const attachment = new AttachmentBuilder(buffer, { name: 'family.png' });
                     const embed = new EmbedBuilder()
@@ -895,8 +909,11 @@ client.on('messageCreate', async (message) => {
                         .setImage('attachment://family.png')
                         .addFields(
                             { name: '👑 Chef de Lignée', value: formatMention(family.head), inline: true },
-                            { name: '👫 Fratrie', value: Array.from(ext.siblings).map(formatMention).join(', ') || 'Aucun', inline: false },
-                            { name: '👴 Grands-parents', value: Array.from(ext.grandparents).map(formatMention).join(', ') || 'Aucun', inline: false }
+                            { name: '👥 Population', value: `${family.members.length} membre(s)`, inline: true },
+                            { name: '💰 Fortune Totale', value: `**${totalWealth.toLocaleString()}** cr.`, inline: true },
+                            { name: '💍 Union', value: spouseText, inline: true },
+                            { name: '👨‍👩‍👧 Lignée Directe', value: `**Parents:** ${parentsText}\n**Enfants:** ${childrenText}`, inline: false },
+                            { name: '🌳 Parenté Étendue', value: `**Fratrie:** ${Array.from(ext.siblings).map(formatMention).join(', ') || 'Aucun'} | **Grands-Parents:** ${Array.from(ext.grandparents).map(formatMention).join(', ') || 'Aucun'} | **Oncles/Tantes:** ${Array.from(ext.unclesAunts).map(formatMention).join(', ') || 'Aucun'} | **Cousins:** ${Array.from(ext.cousins).map(formatMention).join(', ') || 'Aucun'}`, inline: false }
                         )
                         .setTimestamp();
                     return i.followUp({ embeds: [embed], files: [attachment] });
