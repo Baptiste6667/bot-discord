@@ -955,7 +955,7 @@ client.on('messageCreate', async (message) => {
                 const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['fam_action', 'create_fam', 'cancel_main', 'view_branch', 'view_global', 'confirm_del'].includes(i.customId), time: 120000 });
                 
                 collector.on('collect', async (i) => {
-                    if (i.customId === 'cancel_main' || (i.isStringSelectMenu() && i.values?.[0] === 'cancel')) {
+                    if (i.customId === 'cancel_main') { // Gérer le bouton d'annulation principal
                         await i.deferUpdate();
                         return msg.delete().catch(() => {});
                     }
@@ -974,12 +974,6 @@ client.on('messageCreate', async (message) => {
                     return i.showModal(modal);
                 }
 
-                const action = i.values[0];
-                if (action === 'delete') {
-                    const confirm = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('confirm_del').setLabel('Confirmer la dissolution').setStyle(ButtonStyle.Danger));
-                    return i.update({ content: "⚠️ Dissoudre la famille ?", components: [confirm] });
-                }
-                
                 if (i.customId === 'confirm_del') {
                     const family = await db.getFamily(guildId, authorData.familyName);
                     if (family) {
@@ -987,82 +981,96 @@ client.on('messageCreate', async (message) => {
                             await db.updateUser(guildId, mId, { familyName: null, spouse: null, children: [], mother: null, father: null, customLinks: {} });
                         }
                         await db.deleteFamily(guildId, family.familyName);
-                        await msg.delete().catch(() => {});
+                        await i.update({ components: [] }); // Supprimer les boutons de confirmation
                         return i.channel.send({ embeds: [successEmbed(`La famille **${family.familyName.toUpperCase()}** a été dissoute.`)] });
                     }
                     return;
                 }
 
-                if (action === 'leave') {
-                    await clearUserFamilyLinks(guildId, authorId);
-                    await msg.delete().catch(() => {});
-                    return i.channel.send(`👋 ${message.author} a quitté sa famille.`);
-                }
+                // Gérer les interactions du menu de sélection 'fam_action'
+                if (i.customId === 'fam_action' && i.isStringSelectMenu()) {
+                    const action = i.values[0]; // Ici, i.values[0] est sûr car c'est un StringSelectMenu
 
-                let targetSelectRow;
-                if (action === 'add') {
-                    targetSelectRow = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('Choisir le futur membre...'));
-                } else {
-                    const family = await db.getFamily(guildId, authorData.familyName); // Récupérer la famille pour le filtrage
-                    // On ne propose pas l'auteur lui-même dans la liste des membres à gérer
-                    const filteredMembers = family.members.filter(mId => mId !== authorId);
-
-                    if (filteredMembers.length === 0) {
-                        return i.reply({ content: "❌ Votre famille ne contient aucun autre membre à gérer.", flags: MessageFlags.Ephemeral });
+                    if (action === 'cancel') {
+                        await i.deferUpdate();
+                        return msg.delete().catch(() => {});
                     }
 
-                    const memberOpts = await Promise.all(filteredMembers.map(async (mId) => {
-                        const user = client.users.cache.get(mId) || await client.users.fetch(mId).catch(() => null);
-                        return { label: user ? user.username : mId, value: mId };
-                    }));
-                    targetSelectRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('u').setPlaceholder('Choisir le membre de la famille...').addOptions(memberOpts));
-                }
-                await i.update({ content: `Action : **${action}**.`, components: [targetSelectRow] });
-
-                try {
-                    const ui = await i.message.awaitMessageComponent({ 
-                        filter: subI => subI.user.id === authorId && subI.customId === 'u', 
-                        time: 60000 
-                    });
-                    await ui.deferUpdate();
-
-                    const targetId = ui.values[0];
-                    const targetData = await db.getOrCreateUser(guildId, targetId);
-                    const targetUser = client.users.cache.get(targetId) || await client.users.fetch(targetId).catch(() => null);
-
-                    if (!targetUser) {
-                        await ui.followUp({ content: "❌ Impossible de trouver cet utilisateur.", flags: MessageFlags.Ephemeral });
-                        return msg.delete();
+                    if (action === 'delete') {
+                        const confirm = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('confirm_del').setLabel('Confirmer la dissolution').setStyle(ButtonStyle.Danger));
+                        return i.update({ content: "⚠️ Dissoudre la famille ?", components: [confirm] });
+                    }
+                    
+                    if (action === 'leave') {
+                        await clearUserFamilyLinks(guildId, authorId);
+                        await msg.delete().catch(() => {});
+                        return i.channel.send(`👋 ${message.author} a quitté sa famille.`);
                     }
 
-                    if (action === 'add' && (targetData.familyName === authorData.familyName || targetId === authorId)) {
-                        await ui.followUp({ content: "❌ Cet utilisateur fait déjà partie de votre famille ou c'est vous-même.", flags: MessageFlags.Ephemeral });
-                        return msg.delete();
+                    let targetSelectRow;
+                    if (action === 'add') {
+                        targetSelectRow = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('Choisir le futur membre...'));
+                    } else {
+                        const family = await db.getFamily(guildId, authorData.familyName);
+                        const filteredMembers = family.members.filter(mId => mId !== authorId);
+
+                        if (filteredMembers.length === 0) {
+                            return i.reply({ content: "❌ Votre famille ne contient aucun autre membre à gérer.", flags: MessageFlags.Ephemeral });
+                        }
+
+                        const memberOpts = await Promise.all(filteredMembers.map(async (mId) => {
+                            const user = client.users.cache.get(mId) || await client.users.fetch(mId).catch(() => null);
+                            return { label: user ? user.username : mId, value: mId };
+                        }));
+                        targetSelectRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('u').setPlaceholder('Choisir le membre de la famille...').addOptions(memberOpts));
                     }
-                    if ((action === 'remove' || action === 'modify') && targetData.familyName !== authorData.familyName) {
-                        await ui.followUp({ content: "❌ Cet utilisateur n'est pas dans votre famille.", flags: MessageFlags.Ephemeral });
-                        return msg.delete();
+                    await i.update({ content: `Action : **${action}**.`, components: [targetSelectRow] });
+
+                    try {
+                        const ui = await i.message.awaitMessageComponent({ 
+                            filter: subI => subI.user.id === authorId && subI.customId === 'u', 
+                            time: 60000 
+                        });
+                        await ui.deferUpdate();
+
+                        const targetId = ui.values[0];
+                        const targetData = await db.getOrCreateUser(guildId, targetId);
+                        const targetUser = client.users.cache.get(targetId) || await client.users.fetch(targetId).catch(() => null);
+
+                        if (!targetUser) {
+                            await ui.followUp({ content: "❌ Impossible de trouver cet utilisateur.", flags: MessageFlags.Ephemeral });
+                            return msg.delete();
+                        }
+
+                        if (action === 'add' && (targetData.familyName === authorData.familyName || targetId === authorId)) {
+                            await ui.followUp({ content: "❌ Cet utilisateur fait déjà partie de votre famille ou c'est vous-même.", flags: MessageFlags.Ephemeral });
+                            return msg.delete();
+                        }
+                        if ((action === 'remove' || action === 'modify') && targetData.familyName !== authorData.familyName) {
+                            await ui.followUp({ content: "❌ Cet utilisateur n'est pas dans votre famille.", flags: MessageFlags.Ephemeral });
+                            return msg.delete();
+                        }
+
+                        if (action === 'remove') return startFamilyVote(guildId, ui, message.author, targetUser, 'Aucun', 'remove');
+
+                        const rMenu = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('r').setPlaceholder('Rôle...').addOptions(ROLES_LIST.map(r => ({ label: r, value: r }))));
+                        const rCancel = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('c_r').setLabel('Annuler').setStyle(ButtonStyle.Danger));
+                        await ui.editReply({ content: `Rôle pour <@${targetUser.id}> :`, components: [rMenu, rCancel] });
+
+                        const ri = await i.message.awaitMessageComponent({ 
+                            filter: subI => subI.user.id === authorId && ['r', 'c_r'].includes(subI.customId), 
+                            time: 60000 
+                        });
+                        await ri.deferUpdate();
+
+                        if (ri.customId === 'c_r') return msg.delete();
+
+                        if (action === 'add') await sendInvitation(guildId, ri, message.author, targetUser, ri.values[0], 'add');
+                        else await startFamilyVote(guildId, ri, message.author, targetUser, ri.values[0], 'modify');
+                    } catch (e) {
+                        console.error("Erreur family (membre/rôle):", e);
+                        if (msg) await msg.edit({ embeds: [errorEmbed("Action annulée ou temps écoulé.")], components: [] }).catch(() => {});
                     }
-
-                    if (action === 'remove') return startFamilyVote(guildId, ui, message.author, targetUser, 'Aucun', 'remove');
-
-                    const rMenu = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('r').setPlaceholder('Rôle...').addOptions(ROLES_LIST.map(r => ({ label: r, value: r })))); // Menu de sélection du rôle
-                    const rCancel = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('c_r').setLabel('Annuler').setStyle(ButtonStyle.Danger));
-                    await ui.editReply({ content: `Rôle pour <@${targetUser.id}> :`, components: [rMenu, rCancel] });
-
-                    const ri = await i.message.awaitMessageComponent({ 
-                        filter: subI => subI.user.id === authorId && ['r', 'c_r'].includes(subI.customId), 
-                        time: 60000 
-                    });
-                    await ri.deferUpdate();
-
-                    if (ri.customId === 'c_r') return msg.delete();
-
-                    if (action === 'add') await sendInvitation(guildId, ri, message.author, targetUser, ri.values[0], 'add');
-                    else await startFamilyVote(guildId, ri, message.author, targetUser, ri.values[0], 'modify'); // L'interaction `ri` est passée au vote
-                } catch (e) {
-                    console.error("Erreur family (membre/rôle):", e);
-                    if (msg) await msg.edit({ embeds: [errorEmbed("Action annulée ou temps écoulé.")], components: [] }).catch(() => {}); // Le message sera supprimé par le collector.on('end')
                 }
             });
                 // Suppression automatique du menu à la fin (temps écoulé ou fermeture manuelle)
