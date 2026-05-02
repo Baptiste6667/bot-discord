@@ -840,6 +840,41 @@ client.on('messageCreate', async (message) => {
             return;
         }
 
+        case 'familyhistory':
+        case 'fh': {
+            let familyNameArg = args.join(' ');
+            let family;
+
+            if (familyNameArg) {
+                // Mode Admin : consulter une famille précise via son nom
+                if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                    return message.reply({ embeds: [errorEmbed("Seuls les administrateurs peuvent consulter l'historique d'une autre famille via son nom.")] });
+                }
+                family = await db.getFamily(guildId, familyNameArg.toLowerCase());
+                if (!family) {
+                    return message.reply({ embeds: [errorEmbed(`La famille "**${familyNameArg.toUpperCase()}**" n'existe pas sur ce serveur.`)] });
+                }
+            } else {
+                // Mode Utilisateur : consulter sa propre famille
+                if (!authorData.familyName) {
+                    return message.reply({ embeds: [errorEmbed("Vous n'avez pas de famille. Utilisez `,family` pour en créer une.")] });
+                }
+                family = await db.getFamily(guildId, authorData.familyName);
+                if (!family) {
+                    return message.reply({ embeds: [errorEmbed("Erreur : Impossible de charger les données de votre famille.")] });
+                }
+            }
+
+            const historyEntries = family.history || [];
+            const historyEmbed = new EmbedBuilder()
+                .setTitle(`📜 Histoire des ${family.familyName.toUpperCase()}`)
+                .setColor('#f1c40f')
+                .setDescription(historyEntries.map(h => `• [${new Date(h.date).toLocaleDateString('fr-FR')}] ${h.action}`).reverse().join('\n') || "Aucun événement enregistré dans les annales.")
+                .setTimestamp();
+
+            return message.channel.send({ embeds: [historyEmbed] });
+        }
+
         case 'family': {
             let embed = new EmbedBuilder().setColor("#5865F2");
             let rows = [];
@@ -1127,11 +1162,11 @@ client.on('messageCreate', async (message) => {
                 .setThumbnail(client.user.displayAvatarURL())
                 .setDescription(`Gérez vos lignées et votre fortune via nos dashboards interactifs !\nPréfixe : \`${PREFIX}\``)
                 .addFields(
-                    { name: '🏠 Famille', value: `\`${PREFIX}family\` : Dashboard personnel.\n\`${PREFIX}family <Nom/ID> [global]\` : Arbre visuel.\n\`${PREFIX}fh [Nom]\` : Historique de la lignée.\n\`${PREFIX}listfamilies\` : Liste des familles.` },
+                    { name: '🏠 Famille', value: `\`${PREFIX}family\` : Dashboard personnel.\n\`${PREFIX}family <Nom/ID> [global]\` : Arbre visuel.\n\`${PREFIX}listfamilies\` : Liste des familles.` },
                     { name: 'ℹ️ Profil', value: `\`${PREFIX}info [@User]\` : Fiche d'identité et personnalisation.` },
                     { name: '💰 Économie', value: `\`${PREFIX}account\` : Fortune du foyer et classement des richesses.` },
                     { name: '💍 Relations & Social', value: `\`${PREFIX}ask <@User>\` : Se mettre en couple.\n\`${PREFIX}end\` : Rompre la relation.\n\`${PREFIX}marry <@User>\` : Mariage.\n\`${PREFIX}love-calc <@U1> [@U2]\` : Test de compatibilité.\n\`${PREFIX}divorce\`, \`${PREFIX}hug\`, \`${PREFIX}kiss\`, \`${PREFIX}pat\`, \`${PREFIX}slap\`, \`${PREFIX}tickle\`, \`${PREFIX}dance\`, \`${PREFIX}cuddle\`, \`${PREFIX}bite\`, \`${PREFIX}highfive\`, \`${PREFIX}handhold\`` },
-                    { name: '⚙️ Administration', value: `\`${PREFIX}adminfamily <Nom>\` : Gestion forcée (Rename, Transfert, Historique).\n\`${PREFIX}resetdb\` : Réinitialisation complète (Admin uniquement).` }
+                    { name: '⚙️ Administration', value: `\`${PREFIX}adminfamily <Nom>\` : Gestion forcée (Rename, Transfert, Historique).\n\`${PREFIX}fh <Nom>\` : Historique d'une lignée.\n\`${PREFIX}resetdb\` : Réinitialisation complète (Admin uniquement).` }
                 );
             return message.channel.send({ embeds: [h] }); // La réponse reste
         }
