@@ -136,6 +136,29 @@ async function mergeFamilies(guildId, inviterFamilyName, invitedFamilyName, invi
     }
     await updateFamily(guildId, inviterFamilyName, { members: inviterFamily.members });
 
+    // Gestion des branches : Renommer toutes les sous-branches de la lignée fusionnée
+    const branches = await familiesCollection.find({ 
+        guildId, 
+        familyName: { $regex: new RegExp(`^${invitedFamilyName}-`, 'i') } 
+    }).toArray();
+
+    for (const branch of branches) {
+        const newBranchName = branch.familyName.replace(new RegExp(`^${invitedFamilyName}`, 'i'), inviterFamilyName);
+        const newBranchId = `${guildId}_${newBranchName.toLowerCase()}`;
+        
+        // On recrée la branche sous son nouveau nom hiérarchique
+        await familiesCollection.deleteOne({ _id: branch._id });
+        await familiesCollection.insertOne({
+            ...branch,
+            _id: newBranchId,
+            familyName: newBranchName.toLowerCase()
+        });
+
+        for (const mId of branch.members) {
+            await updateUser(guildId, mId, { familyName: newBranchName.toLowerCase() });
+        }
+    }
+
     // Pont relationnel logique
     const inviter = await getOrCreateUser(guildId, inviterId);
     const invited = await getOrCreateUser(guildId, invitedId);

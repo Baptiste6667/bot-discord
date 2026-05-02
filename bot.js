@@ -1799,7 +1799,15 @@ client.on('messageCreate', async (message) => {
                     if (!authorData.spouse) return i.reply({ content: "Pas de conjoint.", flags: MessageFlags.Ephemeral });
                     const sData = await db.getOrCreateUser(guildId, authorData.spouse);
                     if (!sData.familyName) return i.reply({ content: "Pas de nom de famille.", flags: MessageFlags.Ephemeral });
+                    
+                    // Quitter l'ancienne famille proprement avant de rejoindre
+                    await db.clearUserFamilyLinksDB(guildId, authorId);
                     await db.updateUser(guildId, authorId, { familyName: sData.familyName });
+                    const targetFam = await db.getFamily(guildId, sData.familyName);
+                    if (targetFam && !targetFam.members.includes(authorId)) {
+                        targetFam.members.push(authorId);
+                        await db.updateFamily(guildId, sData.familyName, { members: targetFam.members });
+                    }
                     return i.update({ content: "💍 Nom adopté !", components: [] }); // La réponse est persistante
                 }
             });
