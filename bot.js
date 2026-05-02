@@ -1859,11 +1859,13 @@ client.on('interactionCreate', async (interaction) => {
             await db.updateFamily(guildId, newName, { members: family.members });
             for (const mId of family.members) await db.updateUser(guildId, mId, { familyName: newName });
             await db.deleteFamily(guildId, oldName);
+            await db.addFamilyLog(guildId, newName, `🏷️ Nom de la famille changé de "${oldName.toUpperCase()}" à "${newName.toUpperCase()}" par <@${interaction.user.id}>.`);
             await interaction.reply({ content: `✅ Dynastie renommée : **${newName.toUpperCase()}** !` });
         } else {
             if (oldName && family) await db.updateFamily(guildId, oldName, { members: family.members.filter(id => id !== interaction.user.id) });
             await db.createFamily(guildId, newName, interaction.user.id);
             await db.updateUser(guildId, interaction.user.id, { familyName: newName });
+            await db.addFamilyLog(guildId, newName, `🏷️ Branche "${oldName.toUpperCase()}" renommée en "${newName.toUpperCase()}" par <@${interaction.user.id}>.`);
             await propagateNameChange(guildId, interaction.user.id, oldName, newName);
             await interaction.reply({ content: `✅ Branche **${newName.toUpperCase()}** fondée !` });
         }

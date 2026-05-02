@@ -124,7 +124,7 @@ async function clearUserFamilyLinksDB(guildId, userId) {
     if (family) {
       family.members = family.members.filter(id => id !== userId);
       
-      // Enregistrement du départ dans l'historique
+      // Enregistrement du départ dans l'historique (le nom de famille est dans userData.familyName)
       await addFamilyLog(guildId, familyName, `<@${userId}> a quitté ou a été retiré de la famille.`);
 
       if (family.head === userId) {
