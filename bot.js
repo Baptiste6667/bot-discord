@@ -758,7 +758,7 @@ client.on('messageCreate', async (message) => {
     
     // On définit les commandes dont on veut garder la trace (social et info)
     // Seuls help, account, familytop et les interactions sociales restent affichés.
-    const persistentCommands = ['help', 'account', 'familytop', 'marry', 'divorce', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold'];
+    const persistentCommands = ['help', 'account', 'familytop', 'ask', 'end', 'marry', 'divorce', 'love-calc', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold'];
 
     // Suppression automatique du message utilisateur si la commande n'est pas persistante
     if (!persistentCommands.includes(command)) safeDelete(message);
@@ -1153,10 +1153,101 @@ client.on('messageCreate', async (message) => {
                     { name: '🏠 Famille', value: `\`${PREFIX}family\` : Dashboard personnel.\n\`${PREFIX}family <Nom/ID> [global]\` : Arbre visuel.\n\`${PREFIX}listfamilies\` : Liste toutes les familles du serveur.` },
                     { name: 'ℹ️ Profil', value: `\`${PREFIX}info [@User]\` : Fiche d'identité et personnalisation.` },
                     { name: '💰 Économie', value: `\`${PREFIX}account\` : Fortune du foyer et classement des richesses.` },
-                    { name: '💍 Interactions', value: `\`${PREFIX}marry <@User>\` : Mariage.\n\`${PREFIX}divorce\`, \`${PREFIX}hug\`, \`${PREFIX}kiss\`, \`${PREFIX}pat\`, \`${PREFIX}slap\`, \`${PREFIX}tickle\`, \`${PREFIX}dance\`, \`${PREFIX}cuddle\`, \`${PREFIX}bite\`, \`${PREFIX}highfive\`, \`${PREFIX}handhold\`` },
+                    { name: '💍 Relations & Social', value: `\`${PREFIX}ask <@User>\` : Se mettre en couple.\n\`${PREFIX}end\` : Rompre la relation.\n\`${PREFIX}marry <@User>\` : Mariage.\n\`${PREFIX}love-calc <@U1> [@U2]\` : Test de compatibilité.\n\`${PREFIX}divorce\`, \`${PREFIX}hug\`, \`${PREFIX}kiss\`, \`${PREFIX}pat\`, \`${PREFIX}slap\`, \`${PREFIX}tickle\`, \`${PREFIX}dance\`, \`${PREFIX}cuddle\`, \`${PREFIX}bite\`, \`${PREFIX}highfive\`, \`${PREFIX}handhold\`` },
                     { name: '⚙️ Administration', value: `\`${PREFIX}adminfamily <Nom>\` : Outils de gestion forcée.\n\`${PREFIX}resetdb\` : Réinitialisation complète des données du serveur (Admin uniquement).` }
                 );
             return message.channel.send({ embeds: [h] }); // La réponse reste
+        }
+
+        case 'ask': {
+            if (!target) return message.reply('Avec qui souhaites-tu te mettre en couple ?');
+            if (target.id === authorId) return message.reply('C\'est beau l\'amour propre, mais choisis quelqu\'un d\'autre !');
+            if (authorData.couple || authorData.spouse) return message.reply('Tu es déjà engagé(e) !');
+            const tData = await db.getOrCreateUser(guildId, target.id);
+            if (tData.couple || tData.spouse) return message.reply(`${target.username} est déjà en couple ou marié(e).`);
+
+            const askEmbed = new EmbedBuilder()
+                .setTitle("💕 Nouvelle Relation ?")
+                .setColor("#FF69B4")
+                .setDescription(`${formatMention(target.id)}, **${author.username}** te propose de vous mettre en couple !`)
+                .setImage(getGif('handhold'));
+
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('ask_ok').setLabel('Accepter').setStyle(ButtonStyle.Success),
+                new ButtonBuilder().setCustomId('ask_no').setLabel('Refuser').setStyle(ButtonStyle.Danger)
+            );
+
+            const msg = await message.channel.send({ content: `${formatMention(target.id)}`, embeds: [askEmbed], components: [row] });
+            const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === target.id, time: 60000 });
+
+            collector.on('collect', async (i) => {
+                await i.update({ components: [] });
+                if (i.customId === 'ask_ok') {
+                    await executeLinkChange(guildId, authorId, target.id, 'couple', 'add');
+                    const success = new EmbedBuilder()
+                        .setTitle("🎊 C'est officiel !")
+                        .setColor("#FF69B4")
+                        .setDescription(`Félicitations ! **${author.username}** et **${target.username}** sont désormais en couple !`)
+                        .setImage(getGif('ask_accept'));
+                    await i.followUp({ embeds: [success] });
+                } else {
+                    await i.followUp({ content: `😔 ${target.username} a refusé de se mettre en couple avec ${author.username}.`, embeds: [] });
+                }
+                collector.stop();
+            });
+            return;
+        }
+
+        case 'end': {
+            if (!authorData.couple) return message.reply('Tu n\'es pas en couple.');
+            const targetId = authorData.couple;
+
+            const endEmbed = new EmbedBuilder()
+                .setTitle("💔 Rupture")
+                .setColor("#95a5a6")
+                .setDescription(`Es-tu sûr(e) de vouloir mettre fin à ta relation avec ${formatMention(targetId)} ?`);
+
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('confirm_end').setLabel('Confirmer la rupture').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('cancel_end').setLabel('Annuler').setStyle(ButtonStyle.Secondary)
+            );
+
+            const msg = await message.reply({ embeds: [endEmbed], components: [row] });
+            const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
+
+            collector.on('collect', async (i) => {
+                if (i.customId === 'confirm_end') {
+                    await executeLinkChange(guildId, authorId, targetId, 'couple', 'remove');
+                    await i.update({ embeds: [successEmbed(`💔 La relation entre ${formatMention(authorId)} et ${formatMention(targetId)} est terminée.`)], components: [] });
+                } else {
+                    await i.update({ embeds: [errorEmbed("Action annulée.")], components: [] });
+                }
+                collector.stop();
+            });
+            return;
+        }
+
+        case 'love-calc': {
+            let u1, u2;
+            const mentions = message.mentions.users;
+            if (mentions.size === 0) return message.reply({ embeds: [errorEmbed(`Usage: ${PREFIX}love-calc <@User1> [@User2]`)] });
+            if (mentions.size === 1) { u1 = message.author; u2 = mentions.first(); }
+            else { const iter = mentions.values(); u1 = iter.next().value; u2 = iter.next().value; }
+            if (u1.id === u2.id) return message.reply("L'algorithme nécessite deux entités distinctes !");
+
+            const combinedNames = (u1.username + u2.username).toLowerCase().replace(/[^a-z]/g, '');
+            let letterScore = 0;
+            for (const char of "truelove") letterScore += (combinedNames.split(char).length - 1);
+            const idHash = (parseInt(u1.id.slice(-7)) ^ parseInt(u2.id.slice(-7)));
+            const score = Math.abs((letterScore * 73 + idHash)) % 101;
+            const bar = "❤️".repeat(Math.floor(score / 10)) + "🖤".repeat(10 - Math.floor(score / 10));
+
+            const loveEmbed = new EmbedBuilder()
+                .setTitle("🔬 Analyse de Compatibilité Systémique")
+                .setColor(score > 50 ? "#ff4757" : "#747d8c")
+                .setDescription(`Analyse pour **${u1.username}** et **${u2.username}**.\n\n**Score : ${score}%**\n${bar}`)
+                .setFooter({ text: "Moteur analytique Dynastie v3.0.1" });
+            return message.channel.send({ embeds: [loveEmbed] });
         }
 
         case 'marry': {
@@ -1375,8 +1466,8 @@ client.on('messageCreate', async (message) => {
                     { name: '🎭 Rang', value: family?.head === targetUser.id ? "Chef" : (userData.familyName ? "Membre" : "Aucun"), inline: true },
                     { name: '👤 Genre', value: userData.gender || 'Non défini', inline: true },
                     { name: '📝 Bio', value: userData.bio || 'Aucune bio définie.', inline: false },
-                    { name: '� Relation', value: userData.spouse ? `Marié(e) à ${formatMention(userData.spouse)}` : (userData.couple ? `En couple avec ${formatMention(userData.couple)}` : 'Célibataire'), inline: true },
-                    { name: '� Père', value: userData.father ? formatMention(userData.father) : 'Inconnu', inline: true },
+                    { name: '💕 Relation', value: userData.spouse ? `Marié(e) à ${formatMention(userData.spouse)}` : (userData.couple ? `En couple avec ${formatMention(userData.couple)}` : 'Célibataire'), inline: true },
+                    { name: '👨 Père', value: userData.father ? formatMention(userData.father) : 'Inconnu', inline: true },
                     { name: '👩 Mère', value: userData.mother ? formatMention(userData.mother) : 'Inconnue', inline: true }
                 );
 

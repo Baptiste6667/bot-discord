@@ -40,6 +40,8 @@ async function getOrCreateUser(guildId, userId) {
     father: null,
     customLinks: {},
     familyName: null,
+    previousFamily: null,
+    couple: null,
     bio: "",
     gender: null
   };
