@@ -454,8 +454,9 @@ async function propagateNameChange(guildId, userId, oldName, newName) { // No lo
                 // Remove from old family members if it was there
                 const oldFamily = await db.getFamily(guildId, oldName);
                 if (oldFamily) {
-                    oldFamily.members = oldFamily.members.filter(id => id !== childId);
-                    await db.updateFamily(guildId, oldName, { members: oldFamily.members });
+                    const remaining = oldFamily.members.filter(id => id !== childId);
+                    if (remaining.length === 0) await db.deleteFamily(guildId, oldName);
+                    else await db.updateFamily(guildId, oldName, { members: remaining });
                 }
                 await propagateNameChange(guildId, childId, oldName, newName);
             }
@@ -798,7 +799,7 @@ client.on('messageCreate', async (message) => {
     
     // On définit les commandes dont on veut garder la trace (social et info)
     // Seuls help, account, familytop et les interactions sociales restent affichés.
-    const persistentCommands = ['help', 'account', 'familytop', 'familyhistory', 'fh', 'ask', 'end', 'marry', 'divorce', 'love-calc', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold'];
+    const persistentCommands = ['help', 'account', 'familytop', 'familyhistory', 'fh', 'ask', 'end', 'marry', 'divorce', 'love-calc', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold', 'listfamilies'];
 
     // Suppression automatique du message utilisateur si la commande n'est pas persistante
     if (!persistentCommands.includes(command)) safeDelete(message);
@@ -1639,29 +1640,79 @@ client.on('messageCreate', async (message) => {
         case 'listfamilies': {
             try {
                 const families = await db.getAllFamilies(guildId);
-                const familyList = Object.values(families);
+                let familyList = Object.values(families);
 
-                if (familyList.length === 0) {
-                    return message.channel.send({ embeds: [errorEmbed("Aucune famille n'a encore été créée sur ce serveur.")] });
+                // Filtrage et enrichissement avec la richesse en temps réel + Nettoyage
+                const enrichedFamilies = (await Promise.all(familyList.map(async (f) => {
+                    if (!f.members || f.members.length === 0) {
+                        await db.deleteFamily(guildId, f.familyName);
+                        return null;
+                    }
+                    
+                    const res = await Promise.all(f.members.map(id => getUBUser(guildId, id)));
+                    const total = res.reduce((acc, r) => acc + (r ? r.cash : 0), 0);
+                    return { ...f, totalWealth: total };
+                }))).filter(f => f !== null);
+
+                if (enrichedFamilies.length === 0) {
+                    return message.channel.send({ embeds: [errorEmbed("Aucune lignée active n'a été trouvée.")] });
                 }
 
-                // Tri alphabétique par nom
-                familyList.sort((a, b) => a.familyName.localeCompare(b.familyName));
+                // Groupement Hiérarchique par Racine (ex: "Vongola" regroupe "Vongola-Marc")
+                const rootLignages = {};
+                enrichedFamilies.forEach(f => {
+                    const rootName = f.familyName.split('-')[0].toLowerCase();
+                    if (!rootLignages[rootName]) {
+                        rootLignages[rootName] = { 
+                            name: rootName, 
+                            branches: [], 
+                            totalWealth: 0, 
+                            totalMembers: 0, 
+                            mainHead: null 
+                        };
+                    }
+                    
+                    rootLignages[rootName].branches.push(f);
+                    rootLignages[rootName].totalWealth += f.totalWealth;
+                    rootLignages[rootName].totalMembers += f.members.length;
+                    
+                    if (f.familyName === rootName) rootLignages[rootName].mainHead = f.head;
+                });
+
+                // Tri des lignées par richesse totale
+                const sortedRoots = Object.values(rootLignages).sort((a, b) => b.totalWealth - a.totalWealth);
 
                 const embed = new EmbedBuilder();
                 embed
-                    .setTitle(`🏰 Dynasties de ${message.guild.name}`)
+                    .setTitle(`🏰 Registre des Dynasties - ${message.guild.name}`)
                     .setColor('#5865F2')
                     .setThumbnail(message.guild.iconURL())
-                    .setDescription(`Voici la liste des **${familyList.length}** familles fondées sur ce serveur :`)
+                    .setDescription(`Voici les lignées du serveur regroupées par branches et classées par fortune totale :`)
                     .setTimestamp();
 
-                const listText = familyList.map((f, i) => {
-                    const date = f.createdAt ? new Date(f.createdAt).toLocaleDateString('fr-FR') : 'Inconnue';
-                    return `**${i + 1}. ${f.familyName.toUpperCase()}**\n┕ 👑 Chef: ${formatMention(f.head)} | 👥 Membres: ${f.members.length} | 📅 ${date}`;
-                }).join('\n\n');
+                let listText = "";
+                sortedRoots.slice(0, 10).forEach((root, i) => {
+                    const headMention = root.mainHead ? formatMention(root.mainHead) : formatMention(root.branches[0].head);
+                    let rootEntry = `**${i + 1}. LIGNÉE ${root.name.toUpperCase()}**\n`;
+                    rootEntry += `┕ 💰 **${root.totalWealth.toLocaleString()}** cr. | 👥 ${root.totalMembers} membres\n`;
+                    rootEntry += `┕ 👑 Chef: ${headMention}\n`;
+                    
+                    if (root.branches.length > 1 || (root.branches.length === 1 && root.branches[0].familyName !== root.name)) {
+                        rootEntry += `┕ 🌿 *Branches :*\n`;
+                        root.branches.sort((a, b) => b.totalWealth - a.totalWealth);
+                        root.branches.forEach(b => {
+                            const bName = b.familyName === root.name ? "Principale" : b.familyName.split('-').slice(1).join('-').toUpperCase();
+                            rootEntry += `   • \`${bName}\` : ${b.totalWealth.toLocaleString()} cr.\n`;
+                        });
+                    }
+                    listText += rootEntry + "\n";
+                });
 
-                embed.setDescription(`${embed.data.description}\n\n${listText.length > 4000 ? listText.substring(0, 3997) + '...' : listText}`);
+                if (sortedRoots.length > 10) {
+                    listText += `*... et ${sortedRoots.length - 10} autres lignées répertoriées.*`;
+                }
+
+                embed.setDescription(`${embed.data.description}\n\n${listText}`);
 
                 return message.channel.send({ embeds: [embed] });
             } catch (err) {
@@ -2036,7 +2087,11 @@ client.on('interactionCreate', async (interaction) => {
                 await db.addFamilyLog(guildId, newName, `🏷️ Dynastie renommée de ${oldName.toUpperCase()} à ${newName.toUpperCase()} par <@${interaction.user.id}>.`);
                 await interaction.editReply({ content: `✅ Dynastie renommée : **${newName.toUpperCase()}** !` });
             } else {
-                if (oldName && family) await db.updateFamily(guildId, oldName, { members: family.members.filter(id => id !== interaction.user.id) });
+                if (oldName && family) {
+                    const remaining = family.members.filter(id => id !== interaction.user.id);
+                    if (remaining.length === 0) await db.deleteFamily(guildId, oldName);
+                    else await db.updateFamily(guildId, oldName, { members: remaining });
+                }
                 await db.createFamily(guildId, newName, interaction.user.id);
                 await db.updateUser(guildId, interaction.user.id, { familyName: newName });
                 await db.addFamilyLog(guildId, newName, `🏷️ Nouvelle branche fondée : ${newName.toUpperCase()} (issue de ${oldName.toUpperCase()}).`);

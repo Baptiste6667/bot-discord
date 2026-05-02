@@ -225,7 +225,11 @@ async function clearUserFamilyLinksDB(guildId, userId) {
             await updateFamily(guildId, family.familyName, { head: family.head, members: family.members });
         }
       } else {
-        await updateFamily(guildId, family.familyName, { members: family.members });
+        if (family.members.length === 0) {
+          await deleteFamily(guildId, family.familyName);
+        } else {
+          await updateFamily(guildId, family.familyName, { members: family.members });
+        }
       }
     }
   }
