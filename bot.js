@@ -183,8 +183,12 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
     const family = userData.familyName ? await db.getFamily(guildId, userData.familyName) : null;
 
     // Calcul dynamique de la largeur en fonction du nombre d'enfants (220px par enfant)
-    const childrenData = (userData.children || []);
-    const canvasWidth = Math.max(800, childrenData.length * 210 + 100);
+    let membersToDraw = (userData.children || []);
+    if (isGlobal && family && family.head === userId) {
+        // En mode global sur le chef, on dessine les membres de la famille qui ont leur propre branche
+        membersToDraw = family.members.filter(mId => mId !== userId);
+    }
+    const canvasWidth = Math.max(800, membersToDraw.length * 210 + 100);
     const canvasHeight = 550;
     const centerX = canvasWidth / 2;
     const centerY = 280;
@@ -305,7 +309,7 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
         ctx.beginPath(); ctx.moveTo(centerX, centerY - 35); ctx.lineTo(xPos, 130 + 35); ctx.stroke();
     }
 
-    const childrenDataLines = childrenData;
+    const childrenDataLines = membersToDraw;
     for (let i = 0; i < childrenDataLines.length; i++) {
         const spread = canvasWidth - 100;
         const xPos = centerX + (i - (childrenDataLines.length - 1) / 2) * (childrenDataLines.length > 1 ? spread / (Math.max(1, childrenDataLines.length - 1)) : 0);
@@ -323,7 +327,7 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
     for (let i = 0; i < childrenDataLines.length; i++) {
         const spread = canvasWidth - 100;
         const xPos = centerX + (i - (childrenDataLines.length - 1) / 2) * (childrenDataLines.length > 1 ? spread / Math.max(1, childrenDataLines.length - 1) : 0);
-        await drawNode(childrenDataLines[i], xPos, 430, "Enfant");
+        await drawNode(childrenDataLines[i], xPos, 430, isGlobal ? "Branche" : "Enfant");
     }
     
     await drawNode(userId, centerX, centerY, "Moi", '#5865F2');
@@ -611,6 +615,68 @@ async function startFamilyVote(guildId, interaction, author, target, role, actio
     });
 }
 
+/**
+ * Gère le vote à la majorité pour une fusion de famille
+ */
+async function startMajorityMergeVote(guildId, interaction, author, target, targetFamily, role) {
+    const membersToVote = targetFamily.members.filter(id => id !== target.id);
+    const requiredVotes = Math.floor(membersToVote.length / 2) + 1;
+    
+    const voteEmbed = new EmbedBuilder()
+        .setTitle("🗳️ Vote d'Alliance (Majorité Requise)")
+        .setColor("#3498db")
+        .setDescription(`**${target.username}** souhaite fusionner votre lignée avec celle de **${author.username}**.\n\n**Condition :** La majorité (**${requiredVotes}** votes) doit accepter.\n**Rôle final :** ${role}\n\n*Si le NON l'emporte, la fusion sera annulée.*`);
+
+    const row = new ActionRowBuilder().addComponents(
+        new ButtonBuilder().setCustomId('un_yes').setLabel('Accepter (0)').setStyle(ButtonStyle.Success),
+        new ButtonBuilder().setCustomId('un_no').setLabel('Refuser (0)').setStyle(ButtonStyle.Danger)
+    );
+
+    const voteMsg = await interaction.channel.send({ content: membersToVote.map(id => formatMention(id)).join(' '), embeds: [voteEmbed], components: [row] });
+    
+    const votesYes = new Set();
+    const collector = voteMsg.createMessageComponentCollector({ 
+        filter: (i) => membersToVote.includes(i.user.id),
+        time: 120000 
+    });
+
+    collector.on('collect', async (i) => {
+        if (i.customId === 'un_no') {
+            votesYes.delete(i.user.id);
+            votesNo.add(i.user.id);
+        } else {
+            votesNo.delete(i.user.id);
+            votesYes.add(i.user.id);
+        }
+        
+        const upRow = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId('un_yes').setLabel(`Accepter (${votesYes.size}/${membersToVote.length})`).setStyle(ButtonStyle.Success),
+            new ButtonBuilder().setCustomId('un_no').setLabel(`Refuser (${votesNo.size})`).setStyle(ButtonStyle.Danger)
+        );
+        await i.update({ components: [upRow] });
+
+        if (votesYes.size >= requiredVotes) {
+            collector.stop('success');
+        } else if (votesNo.size > membersToVote.length - requiredVotes) {
+            collector.stop('refused');
+        }
+    });
+
+    collector.on('end', async (collected, reason) => {
+        if (reason === 'success') {
+            const authorData = await db.getOrCreateUser(guildId, author.id);
+            const targetData = await db.getOrCreateUser(guildId, target.id);
+            await db.mergeFamilies(guildId, authorData.familyName, targetFamily.familyName, author.id, target.id, role);
+            await executeLinkChange(guildId, author.id, target.id, role, 'add');
+            await voteMsg.edit({ content: `✅ **Alliance scellée !** Les deux familles ont fusionné suite au vote majoritaire.`, embeds: [], components: [] });
+        } else if (reason !== 'refused') {
+            await voteMsg.edit({ content: "⌛ **Temps écoulé.** La majorité n'a pas été atteinte, la fusion est annulée.", embeds: [], components: [] });
+        } else {
+            await voteMsg.edit({ content: `❌ **Fusion rejetée.** La majorité s'est opposée à l'alliance.`, embeds: [], components: [] });
+        }
+    });
+}
+
 async function sendInvitation(guildId, interaction, author, target, role, action, fromVote = false) {
     const authorData = await db.getOrCreateUser(guildId, author.id);
     const targetData = await db.getOrCreateUser(guildId, target.id);
@@ -630,10 +696,15 @@ async function sendInvitation(guildId, interaction, author, target, role, action
             new ButtonBuilder().setCustomId('i_no').setLabel('Refuser').setStyle(ButtonStyle.Danger)
         );
     } else {
-        row = new ActionRowBuilder().addComponents( 
-            new ButtonBuilder().setCustomId('i_ok').setLabel('Accepter').setStyle(ButtonStyle.Success),
-            new ButtonBuilder().setCustomId('i_no').setLabel('Refuser').setStyle(ButtonStyle.Danger)
-        );
+        const buttons = [
+            new ButtonBuilder().setCustomId('i_ok').setLabel('Accepter').setStyle(ButtonStyle.Success)
+        ];
+        // On ne propose pas de créer une branche pour les tantes (ou oncles) pour garder les noms unis
+        if (!['tante', 'oncle'].includes(role.toLowerCase())) {
+            buttons.push(new ButtonBuilder().setCustomId('i_branch').setLabel('Rejoindre & Créer Branche').setStyle(ButtonStyle.Primary));
+        }
+        buttons.push(new ButtonBuilder().setCustomId('i_no').setLabel('Refuser').setStyle(ButtonStyle.Danger));
+        row = new ActionRowBuilder().addComponents(buttons);
     }
 
     // Sécurité accrue pour déterminer si on doit utiliser reply ou editReply
@@ -646,19 +717,28 @@ async function sendInvitation(guildId, interaction, author, target, role, action
     collector.on('collect', async (i) => {
         if (i.user.id !== target.id) return i.reply({ content: "Ce n'est pas pour vous.", flags: MessageFlags.Ephemeral });
 
-        if (i.customId === 'i_ok') {
+        if (i.customId === 'i_ok' || i.customId === 'i_branch') {
             if (targetData.familyName && authorData.familyName && targetData.familyName !== authorData.familyName) await clearUserFamilyLinks(guildId, target.id);
             await executeLinkChange(guildId, author.id, target.id, role, action);
             if (authorData.familyName) {
+                let targetFamName = authorData.familyName;
+                if (i.customId === 'i_branch') {
+                    targetFamName = `${authorData.familyName}-${target.username.substring(0, 4)}`.toLowerCase();
+                    if (!await db.getFamily(guildId, targetFamName)) {
+                        await db.createFamily(guildId, targetFamName, target.id);
+                        await db.addFamilyLog(guildId, targetFamName, `🌿 Nouvelle branche fondée par <@${target.id}> au sein de la lignée ${authorData.familyName.toUpperCase()}.`);
+                    }
+                }
+
                 const family = await db.getFamily(guildId, authorData.familyName);
                 if (family && !family.members.includes(target.id)) {
                     family.members.push(target.id);
                     await db.updateFamily(guildId, authorData.familyName, { members: family.members });
                 }
-                await db.updateUser(guildId, target.id, { familyName: authorData.familyName });
+                await db.updateUser(guildId, target.id, { familyName: targetFamName });
             }
             await i.message.delete().catch(() => {});
-            await i.channel.send(`🎊 Félicitations ! ${target} est maintenant le/la **${role}** de ${author} !`);
+            await i.channel.send(`🎊 Félicitations ! ${target} est maintenant le/la **${role}** de ${author}${i.customId === 'i_branch' ? " et a fondé sa propre branche" : ""} !`);
         } else if (i.customId === 'i_merge') {
         await db.mergeFamilies(guildId, authorData.familyName, targetData.familyName, author.id, target.id, role);
             await executeLinkChange(guildId, author.id, target.id, role, action);
@@ -736,12 +816,11 @@ client.on('messageCreate', async (message) => {
                 );
 
                 const msg = await message.channel.send({ embeds: [embed], components: [row1, row2] });
-                const coll = msg.createMessageComponentCollector({ 
-                    filter: i => i.user.id === authorId && ['admin_add', 'admin_modify', 'admin_remove', 'admin_clear', 'admin_cancel', 'admin_transfer', 'admin_rename', 'admin_history'].includes(i.customId), 
-                    time: 120000 
-                });
+                const coll = msg.createMessageComponentCollector({ time: 120000 });
 
                 coll.on('collect', async (i) => {
+                    if (i.user.id !== authorId) return i.reply({ content: "❌ Seul l'administrateur ayant invoqué la commande peut interagir.", flags: MessageFlags.Ephemeral });
+
                     if (i.customId === 'admin_cancel') return i.message.delete().catch(() => {});
 
                     if (i.customId === 'admin_history') {
@@ -982,15 +1061,16 @@ client.on('messageCreate', async (message) => {
                 }
 
                 const msg = await message.channel.send({ embeds: [embed], components: rows });
-                const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && (['fam_action', 'create_fam', 'cancel_main', 'view_branch', 'view_global', 'confirm_del'].includes(i.customId) || i.customId.startsWith('fam_')), time: 120000 });
+                const collector = msg.createMessageComponentCollector({ time: 120000 });
                 
                 collector.on('collect', async (i) => {
-                    if (i.customId === 'cancel_main') { // Gérer le bouton d'annulation principal
-                        return msg.delete().catch(() => {});
-                    }
+                    if (i.user.id !== authorId) return i.reply({ content: "❌ Seul l'auteur de la commande peut interagir avec ce menu.", flags: MessageFlags.Ephemeral });
+
+                    if (i.customId === 'cancel_main') return msg.delete().catch(() => {});
 
                     if (i.customId === 'view_branch' || i.customId === 'view_global') {
                     await i.deferUpdate();
+                    await msg.delete().catch(() => {}); // Suppression du menu pour éviter les 40 messages
                     const family = await db.getFamily(guildId, authorData.familyName);
                     const targetId = i.customId === 'view_global' ? family.head : authorId;
                     await sendFamilyDisplay(i, guildId, targetId, i.customId === 'view_global');
@@ -1016,7 +1096,6 @@ client.on('messageCreate', async (message) => {
                     return;
                 }
 
-                // Gérer les interactions des boutons d'action de la famille
                 if (i.customId.startsWith('fam_')) {
                     const action = i.customId.replace('fam_', ''); // Extract action from customId
 
@@ -1162,9 +1241,10 @@ client.on('messageCreate', async (message) => {
                 new ButtonBuilder().setCustomId('v_top').setLabel('🏆 Classement').setStyle(ButtonStyle.Primary),
                 new ButtonBuilder().setCustomId('cancel_bank').setLabel('❌').setStyle(ButtonStyle.Secondary)
             );
-            const msg = await message.reply({ embeds: [initialEmbed], components: [row] }); // La réponse reste
-            const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
+            const msg = await message.reply({ embeds: [initialEmbed], components: [row] });
+            const coll = msg.createMessageComponentCollector({ time: 30000 });
             coll.on('collect', async (i) => {
+                if (i.user.id !== authorId) return i.reply({ content: "❌ Seul l'invocateur peut consulter sa fortune ici.", flags: MessageFlags.Ephemeral });
                 if (i.customId === 'cancel_bank') return i.message.delete();
                 await i.deferUpdate();
                 const newEmbed = (i.customId === 'v_top') ? await showTop(guildId) : await showWealth(guildId, authorId, authorData);
@@ -1507,9 +1587,11 @@ client.on('messageCreate', async (message) => {
             );
 
             const msg = await message.channel.send({ embeds: [resetEmbed], components: [resetRow] }); // La réponse reste
-            const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
+            const collector = msg.createMessageComponentCollector({ time: 30000 });
 
             collector.on('collect', async (i) => {
+                if (i.user.id !== authorId) return i.reply({ content: "❌ Action réservée à l'administrateur.", flags: MessageFlags.Ephemeral });
+                
                 if (i.customId === 'confirm_reset') {
                     await db.resetDatabase(guildId);
                     await i.update({ embeds: [successEmbed("La base de données de ce serveur a été entièrement réinitialisée.")], components: [] });
@@ -1590,8 +1672,10 @@ client.on('messageCreate', async (message) => {
             );
             const msg = await message.channel.send({ embeds: [buildEmbed()], components: targetUser.id === authorId ? [row] : [] });
 
-            const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['edit_p', 'cancel_info', 'sel_gen', 'btn_bio', 'btn_gender', 'btn_name', 'btn_spouse', 'back_info'].includes(i.customId), time: 60000 });
+            const coll = msg.createMessageComponentCollector({ time: 60000 });
             coll.on('collect', async (i) => {
+                if (i.user.id !== authorId) return i.reply({ content: "❌ Seul le propriétaire du profil peut modifier ces informations.", flags: MessageFlags.Ephemeral });
+                
                 if (i.customId === 'cancel_info') {
                     await i.deferUpdate();
                     return msg.delete().catch(() => {});

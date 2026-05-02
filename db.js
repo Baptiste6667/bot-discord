@@ -118,8 +118,8 @@ async function getAllFamilies(guildId) {
 
 // New function to merge two families
 async function mergeFamilies(guildId, inviterFamilyName, invitedFamilyName, inviterId, invitedId, role) {
-    const inviterFamily = await getFamily(guildId, inviterFamilyName);
-    const invitedFamily = await getFamily(guildId, invitedFamilyName);
+    const inviterFamily = await familiesCollection.findOne({ _id: `${guildId}_${inviterFamilyName.toLowerCase()}` });
+    const invitedFamily = await familiesCollection.findOne({ _id: `${guildId}_${invitedFamilyName.toLowerCase()}` });
 
     if (!inviterFamily || !invitedFamily) {
         console.error("Attempted to merge non-existent families.");
@@ -249,10 +249,10 @@ module.exports = {
   getAllUsers,
   getFamily,
   createFamily,
+  mergeFamilies,
   updateFamily,
   deleteFamily,
   getAllFamilies,
-  mergeFamilies,
   clearUserFamilyLinksDB,
   resetDatabase,
   addFamilyLog
