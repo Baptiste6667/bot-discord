@@ -1561,47 +1561,54 @@ client.on('messageCreate', async (message) => {
                 );
 
             const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('edit_p').setLabel('⚙️ Personnaliser').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('edit_p').setLabel('✏️ Modifier Profil').setStyle(ButtonStyle.Primary),
                 new ButtonBuilder().setCustomId('cancel_info').setLabel('Fermer').setStyle(ButtonStyle.Secondary)
             );
             const msg = await message.channel.send({ embeds: [buildEmbed()], components: targetUser.id === authorId ? [row] : [] });
 
-            const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['edit_p', 'cancel_info', 'p_field', 'sel_gen'].includes(i.customId), time: 60000 });
+            const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['edit_p', 'cancel_info', 'sel_gen', 'btn_bio', 'btn_gender', 'btn_name', 'btn_spouse', 'back_info'].includes(i.customId), time: 60000 });
             coll.on('collect', async (i) => {
                 if (i.customId === 'cancel_info') {
                     await i.deferUpdate();
                     return msg.delete().catch(() => {});
                 }
-                if (i.customId === 'edit_p') {
-                    const menu = new StringSelectMenuBuilder().setCustomId('p_field').setPlaceholder('Modifier...')
-                        .addOptions([
-                            { label: 'Ma Bio', value: 'bio' },
-                            { label: 'Mon Genre', value: 'gender' },
-                            { label: 'Nom de Lignée', value: 'name' },
-                            { label: 'Nom du Conjoint', value: 'spouse' }
-                        ]);
-                    return i.update({ content: "Que modifier ?", components: [new ActionRowBuilder().addComponents(menu)] });
+                if (i.customId === 'back_info') {
+                    return i.update({ content: null, embeds: [buildEmbed()], components: [row] });
                 }
-                if (i.values?.[0] === 'bio') {
+                if (i.customId === 'edit_p') {
+                    const editRow1 = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId('btn_bio').setLabel('Ma Bio').setStyle(ButtonStyle.Secondary).setEmoji('📝'),
+                        new ButtonBuilder().setCustomId('btn_gender').setLabel('Mon Genre').setStyle(ButtonStyle.Secondary).setEmoji('👤')
+                    );
+                    const editRow2 = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId('btn_name').setLabel('Renommer Branche').setStyle(ButtonStyle.Secondary).setEmoji('🏷️'),
+                        new ButtonBuilder().setCustomId('btn_spouse').setLabel('Nom Conjoint').setStyle(ButtonStyle.Secondary).setEmoji('💍')
+                    );
+                    const editRow3 = new ActionRowBuilder().addComponents(
+                        new ButtonBuilder().setCustomId('back_info').setLabel('Retour').setStyle(ButtonStyle.Danger)
+                    );
+                    return i.update({ content: "**Que souhaitez-vous modifier ?**", embeds: [], components: [editRow1, editRow2, editRow3] });
+                }
+                if (i.customId === 'btn_bio') {
                     const modal = new ModalBuilder().setCustomId('modal_bio').setTitle('Ma Bio');
                     modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('bio_text').setLabel("Description").setStyle(TextInputStyle.Paragraph).setRequired(true)));
                     return i.showModal(modal);
                 }
-                if (i.values?.[0] === 'gender') {
+                if (i.customId === 'btn_gender') {
                     const gRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('sel_gen').setPlaceholder('Genre...')
                         .addOptions([{ label: 'Masculin', value: 'masculin' }, { label: 'Féminin', value: 'féminin' }, { label: 'Autre', value: 'autre' }]));
-                    return i.update({ content: "Votre genre ?", components: [gRow] });
+                    return i.update({ content: "Choisissez votre genre :", components: [gRow] });
                 }
                 if (i.customId === 'sel_gen') {
                     await db.updateUser(guildId, authorId, { gender: i.values[0] }); // La réponse est persistante
                     return i.update({ content: "✅ Genre mis à jour.", components: [] }); 
                 }
-                if (i.values?.[0] === 'name') {
+                if (i.customId === 'btn_name') {
                     const modal = new ModalBuilder().setCustomId('modal_rename_branch').setTitle('Nom de Branche');
                     modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('new_name').setLabel("Nouveau nom").setStyle(TextInputStyle.Short).setRequired(true)));
                     return i.showModal(modal);
                 }
-                if (i.values?.[0] === 'spouse') {
+                if (i.customId === 'btn_spouse') {
                     if (!authorData.spouse) return i.reply({ content: "Pas de conjoint.", flags: MessageFlags.Ephemeral });
                     const sData = await db.getOrCreateUser(guildId, authorData.spouse);
                     if (!sData.familyName) return i.reply({ content: "Pas de nom de famille.", flags: MessageFlags.Ephemeral });
