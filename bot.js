@@ -68,8 +68,11 @@ const getGif = (action) => {
 
 /** --- BIBLIOTHÈQUE DE GIFS --- **/
 const GIF_LIBRARY = {
-    marry_accept: ['https://media.giphy.com/media/m9SULzJXS6lRhRmB4o/giphy.gif'],
+    marry_accept: ['https://i.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHYzeXN6bmN6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/m9SULzJXS6lRhRmB4o/giphy.gif'],
     marry_decline: ['https://media.giphy.com/media/7T33BLlB7NQrjozoRB/giphy.gif'],
+    ask_accept: ['https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHpueG8ycWV6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/6YfMIn9680i9G/giphy.gif'],
+    ask_decline: ['https://media.giphy.com/media/7T33BLlB7NQrjozoRB/giphy.gif'],
+    end_rel: ['https://media.giphy.com/media/7T33BLlB7NQrjozoRB/giphy.gif'],
     hug: [
         'https://media.giphy.com/media/u9B3S2ArX9X5S/giphy.gif',
         'https://media.giphy.com/media/3M4NpbLCTxBqU/giphy.gif',
@@ -539,6 +542,7 @@ async function executeLinkChange(guildId, id1, id2, role, action) { // No longer
     let d2Update = { customLinks: d2.customLinks || {} };
 
     if (d1.spouse === id2) { d1Update.spouse = null; d2Update.spouse = null; }
+    if (d1.couple === id2) { d1Update.couple = null; d2Update.couple = null; }
     d1Update.children = (d1.children || []).filter(id => id !== id2);
     if (d1.father === id2) d1Update.father = null;
     if (d1.mother === id2) d1Update.mother = null;
@@ -566,6 +570,8 @@ async function executeLinkChange(guildId, id1, id2, role, action) { // No longer
 
     if (role === 'conjoint') {
         d1Update.spouse = id2; d2Update.spouse = id1;
+    } else if (role === 'couple') {
+        d1Update.couple = id2; d2Update.couple = id1;
     } else if (role === 'père' || role === 'mère') {
         const field = role === 'père' ? 'father' : 'mother';
         d1Update[field] = id2;
@@ -611,6 +617,17 @@ async function checkAndProposeMarriage(guildId, userId, familyName) {
 }
 
 async function startFamilyVote(guildId, interaction, author, target, role, action) {
+    const authorData = await db.getOrCreateUser(guildId, author.id);
+    const family = await db.getFamily(guildId, authorData.familyName);
+
+    // Règle spéciale : Si la famille ne compte que 2 membres, le choix du chef est immédiat
+    if (action === 'remove' && family && family.head === author.id && family.members.length <= 2) {
+        await db.clearUserFamilyLinksDB(guildId, target.id);
+        const msgContent = `✅ **Décision du Chef :** En tant que chef d'une lignée de 2 membres, ${author} a décidé de retirer ${target} sans vote.`;
+        if (interaction.replied || interaction.deferred) return interaction.editReply({ content: msgContent, embeds: [], components: [] });
+        else return interaction.update({ content: msgContent, embeds: [], components: [] });
+    }
+
     const voteEmbed = new EmbedBuilder()
         .setTitle("🗳️ Vote de la Communauté")
         .setColor("#f1c40f")
@@ -708,15 +725,15 @@ async function sendInvitation(guildId, interaction, author, target, role, action
                 }
                 await db.updateUser(guildId, target.id, { familyName: authorData.familyName });
             }
-            await i.message.delete();
+            await i.message.delete().catch(() => {});
             await i.channel.send(`🎊 Félicitations ! ${target} est maintenant le/la **${role}** de ${author} !`);
         } else if (i.customId === 'i_merge') {
             await mergeFamilies(guildId, authorData.familyName, targetData.familyName, author.id, target.id, role);
             await executeLinkChange(guildId, author.id, target.id, role, action);
-            await i.message.delete();
+            await i.message.delete().catch(() => {});
             await i.channel.send(`🤝 Les familles ont fusionné ! ${target} est maintenant le/la **${role}** de ${author} !`);
         } else {
-            await i.message.delete();
+            await i.message.delete().catch(() => {});
             await i.channel.send(`😔 ${target} a refusé l'invitation de ${author}.`);
         }
         collector.stop();
@@ -1171,7 +1188,7 @@ client.on('messageCreate', async (message) => {
             });
 
             collector.on('collect', async (i) => {
-                await i.deferUpdate(); // Acknowledge the interaction immediately
+                await i.update({ components: [] }); // Retire les boutons dès le premier clic pour verrouiller le choix
 
                 if (i.customId === 'm_accept') { // Use guildId for all DB calls
                     const currentAuthorData = await db.getOrCreateUser(guildId, authorId);
@@ -1239,7 +1256,7 @@ client.on('messageCreate', async (message) => {
                     // Establish the spouse link
                     await executeLinkChange(guildId, authorId, target.id, 'conjoint', 'add');
                     await i.followUp({ embeds: [acceptEmbed] });
-                    await msg.delete(); // Delete the proposal message
+                    await msg.delete().catch(() => {}); // Suppression sécurisée
                 } else if (i.customId === 'm_decline') {
                     const declineEmbed = new EmbedBuilder()
                         .setTitle('💔 Un Coeur Brisé...')
@@ -1249,7 +1266,7 @@ client.on('messageCreate', async (message) => {
                         .setFooter({ text: 'Peut-être une prochaine fois ?' });
 
                     await i.followUp({ embeds: [declineEmbed] });
-                    await msg.delete(); // Delete the proposal message
+                    await msg.delete().catch(() => {}); // Suppression sécurisée
                 }
                 collector.stop();
             });
@@ -1358,8 +1375,8 @@ client.on('messageCreate', async (message) => {
                     { name: '🎭 Rang', value: family?.head === targetUser.id ? "Chef" : (userData.familyName ? "Membre" : "Aucun"), inline: true },
                     { name: '👤 Genre', value: userData.gender || 'Non défini', inline: true },
                     { name: '📝 Bio', value: userData.bio || 'Aucune bio définie.', inline: false },
-                    { name: '💍 Conjoint', value: userData.spouse ? formatMention(userData.spouse) : 'Célibataire', inline: true },
-                    { name: '👨 Père', value: userData.father ? formatMention(userData.father) : 'Inconnu', inline: true },
+                    { name: '� Relation', value: userData.spouse ? `Marié(e) à ${formatMention(userData.spouse)}` : (userData.couple ? `En couple avec ${formatMention(userData.couple)}` : 'Célibataire'), inline: true },
+                    { name: '� Père', value: userData.father ? formatMention(userData.father) : 'Inconnu', inline: true },
                     { name: '👩 Mère', value: userData.mother ? formatMention(userData.mother) : 'Inconnue', inline: true }
                 );
 
@@ -1435,6 +1452,31 @@ client.on('messageCreate', async (message) => {
 
             collector.on('collect', async (i) => {
                 if (i.customId === 'confirm_divorce') {
+                    const family = await db.getFamily(guildId, authorData.familyName);
+                    if (family) {
+                        // Logique de défusion : On cherche les membres qui avaient une famille d'origine différente
+                        const members = await db.getUsersByIds(guildId, family.members);
+                        const branches = {}; 
+                        for (const m of members) {
+                            if (m.previousFamily) {
+                                if (!branches[m.previousFamily]) branches[m.previousFamily] = [];
+                                branches[m.previousFamily].push(m.userId);
+                            }
+                        }
+
+                        for (const [oldName, mIds] of Object.entries(branches)) {
+                            // On recrée la famille d'origine
+                            const newHead = mIds.includes(targetId) ? targetId : mIds[0];
+                            await db.createFamily(guildId, oldName, newHead);
+                            await db.updateFamily(guildId, oldName, { members: mIds });
+                            for (const mid of mIds) {
+                                await db.updateUser(guildId, mid, { familyName: oldName, previousFamily: null });
+                                family.members = family.members.filter(id => id !== mid);
+                            }
+                        }
+                        await db.updateFamily(guildId, family.familyName, { members: family.members });
+                    }
+
                     await executeLinkChange(guildId, authorId, targetId, null, 'remove');
                     await i.update({ embeds: [successEmbed(`💔 ${formatMention(authorId)} a divorcé de ${formatMention(targetId)} !`)], components: [] });
                 } else {
