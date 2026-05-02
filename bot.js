@@ -696,6 +696,7 @@ client.on('messageCreate', async (message) => {
     const args = message.content.slice(PREFIX.length).trim().split(/\s+/);
     const command = args.shift().toLowerCase();
     const authorId = message.author.id;
+    const author = message.author;
     const guildId = message.guild.id;
     const authorData = await db.getOrCreateUser(guildId, authorId);
     
