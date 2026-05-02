@@ -1869,46 +1869,71 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     if (interaction.customId === 'modal_bio') {
-        await db.updateUser(guildId, interaction.user.id, { bio: interaction.fields.getTextInputValue('bio_text') });
-        await interaction.reply({ content: "✅ Bio mise à jour !", flags: MessageFlags.Ephemeral });
+        try {
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+            await db.updateUser(guildId, interaction.user.id, { bio: interaction.fields.getTextInputValue('bio_text') });
+            await interaction.editReply({ content: "✅ Bio mise à jour !" });
+        } catch (err) {
+            console.error("Erreur bio:", err);
+            if (interaction.deferred) await interaction.editReply({ content: "❌ Impossible de mettre à jour la bio." });
+        }
     }
 
     if (interaction.customId === 'admin_modal_rename') {
-        const newName = interaction.fields.getTextInputValue('new_name').toLowerCase().trim();
-        const oldName = interaction.message.embeds[0].title.split('Famille ')[1].toLowerCase();
-        
-        if (await db.getFamily(guildId, newName)) return interaction.reply({ content: "❌ Ce nom est déjà pris.", flags: MessageFlags.Ephemeral });
-        
-        const family = await db.getFamily(guildId, oldName);
-        await db.createFamily(guildId, newName, family.head);
-        await db.updateFamily(guildId, newName, { members: family.members, history: family.history });
-        for (const mId of family.members) await db.updateUser(guildId, mId, { familyName: newName });
-        await db.deleteFamily(guildId, oldName);
-        await db.addFamilyLog(guildId, newName, `🏷️ Famille renommée de ${oldName.toUpperCase()} à ${newName.toUpperCase()} par un administrateur.`);
-        await interaction.reply({ content: `✅ Famille renommée en **${newName.toUpperCase()}** !`, flags: MessageFlags.Ephemeral });
+        try {
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+            const newName = interaction.fields.getTextInputValue('new_name').toLowerCase().trim();
+            const oldName = interaction.message.embeds[0].title.split('Famille ')[1].toLowerCase();
+            
+            if (await db.getFamily(guildId, newName)) {
+                return interaction.editReply({ content: "❌ Ce nom est déjà pris." });
+            }
+            
+            const family = await db.getFamily(guildId, oldName);
+            if (!family) return interaction.editReply({ content: "❌ Famille introuvable." });
+
+            await db.createFamily(guildId, newName, family.head);
+            await db.updateFamily(guildId, newName, { members: family.members, history: family.history });
+            for (const mId of family.members) await db.updateUser(guildId, mId, { familyName: newName });
+            await db.deleteFamily(guildId, oldName);
+            await db.addFamilyLog(guildId, newName, `🏷️ Famille renommée de ${oldName.toUpperCase()} à ${newName.toUpperCase()} par un administrateur.`);
+            await interaction.editReply({ content: `✅ Famille renommée en **${newName.toUpperCase()}** !` });
+        } catch (err) {
+            console.error("Erreur admin rename:", err);
+            if (interaction.deferred) await interaction.editReply({ content: "❌ Erreur lors du renommage administratif." });
+        }
     }
 
     if (interaction.customId === 'modal_rename_branch') {
-        const newName = interaction.fields.getTextInputValue('new_name').toLowerCase().trim();
-        if (await db.getFamily(guildId, newName)) return interaction.reply({ content: "❌ Nom déjà pris.", flags: MessageFlags.Ephemeral });
-        const uData = await db.getOrCreateUser(guildId, interaction.user.id);
-        const oldName = uData.familyName;
-        const family = oldName ? await db.getFamily(guildId, oldName) : null;
+        try {
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+            const newName = interaction.fields.getTextInputValue('new_name').toLowerCase().trim();
+            if (await db.getFamily(guildId, newName)) {
+                return interaction.editReply({ content: "❌ Nom déjà pris." });
+            }
+            
+            const uData = await db.getOrCreateUser(guildId, interaction.user.id);
+            const oldName = uData.familyName;
+            const family = oldName ? await db.getFamily(guildId, oldName) : null;
 
-        if (family?.head === interaction.user.id) {
-            await db.createFamily(guildId, newName, interaction.user.id);
-            await db.updateFamily(guildId, newName, { members: family.members });
-            for (const mId of family.members) await db.updateUser(guildId, mId, { familyName: newName });
-            await db.deleteFamily(guildId, oldName);
-            await db.addFamilyLog(guildId, newName, `🏷️ Dynastie renommée de ${oldName.toUpperCase()} à ${newName.toUpperCase()} par <@${interaction.user.id}>.`);
-            await interaction.reply({ content: `✅ Dynastie renommée : **${newName.toUpperCase()}** !` });
-        } else {
-            if (oldName && family) await db.updateFamily(guildId, oldName, { members: family.members.filter(id => id !== interaction.user.id) });
-            await db.createFamily(guildId, newName, interaction.user.id);
-            await db.updateUser(guildId, interaction.user.id, { familyName: newName });
-            await db.addFamilyLog(guildId, newName, `🏷️ Nouvelle branche fondée : ${newName.toUpperCase()} (issue de ${oldName.toUpperCase()}).`);
-            await propagateNameChange(guildId, interaction.user.id, oldName, newName);
-            await interaction.reply({ content: `✅ Branche **${newName.toUpperCase()}** fondée !` });
+            if (family?.head === interaction.user.id) {
+                await db.createFamily(guildId, newName, interaction.user.id);
+                await db.updateFamily(guildId, newName, { members: family.members });
+                for (const mId of family.members) await db.updateUser(guildId, mId, { familyName: newName });
+                await db.deleteFamily(guildId, oldName);
+                await db.addFamilyLog(guildId, newName, `🏷️ Dynastie renommée de ${oldName.toUpperCase()} à ${newName.toUpperCase()} par <@${interaction.user.id}>.`);
+                await interaction.editReply({ content: `✅ Dynastie renommée : **${newName.toUpperCase()}** !` });
+            } else {
+                if (oldName && family) await db.updateFamily(guildId, oldName, { members: family.members.filter(id => id !== interaction.user.id) });
+                await db.createFamily(guildId, newName, interaction.user.id);
+                await db.updateUser(guildId, interaction.user.id, { familyName: newName });
+                await db.addFamilyLog(guildId, newName, `🏷️ Nouvelle branche fondée : ${newName.toUpperCase()} (issue de ${oldName.toUpperCase()}).`);
+                await propagateNameChange(guildId, interaction.user.id, oldName, newName);
+                await interaction.editReply({ content: `✅ Branche **${newName.toUpperCase()}** fondée !` });
+            }
+        } catch (err) {
+            console.error("Erreur rename branch:", err);
+            if (interaction.deferred) await interaction.editReply({ content: "❌ Une erreur est survenue (nom peut-être déjà utilisé simultanément)." });
         }
     }
 });
