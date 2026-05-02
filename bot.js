@@ -179,15 +179,22 @@ async function sendFamilyDisplay(ctx, guildId, targetId, isGlobal = false) {
 // --- Visual Tree Generator ---
 async function generateFamilyImage(client, guildId, userId) {
     console.log(`[DEBUG] Début génération image pour : ${userId}`);
-    // Augmenter la taille du canvas si nécessaire pour plus de membres ou un titre plus grand
-    const canvas = createCanvas(800, 550);
-    const ctx = canvas.getContext('2d');
     const userData = await db.getOrCreateUser(guildId, userId); // Fetch user data from DB
     const family = userData.familyName ? await db.getFamily(guildId, userData.familyName) : null;
-    
+
+    // Calcul dynamique de la largeur en fonction du nombre d'enfants (220px par enfant)
+    const childrenData = (userData.children || []);
+    const canvasWidth = Math.max(800, childrenData.length * 210 + 100);
+    const canvasHeight = 550;
+    const centerX = canvasWidth / 2;
+    const centerY = 280;
+
+    const canvas = createCanvas(canvasWidth, canvasHeight);
+    const ctx = canvas.getContext('2d');
+
     // Fond
     ctx.fillStyle = '#1e2124';
-    ctx.fillRect(0, 0, 800, 550);
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
     // Fonction robuste pour dessiner un rectangle arrondi (fallback manuel)
     const fillRoundedRect = (x, y, width, height, radius, color) => {
@@ -265,8 +272,6 @@ async function generateFamilyImage(client, guildId, userId) {
         }
     };
 
-    const centerX = 400, centerY = 280;
-    
     // Dessin du Titre
     if (family) {
         console.log(`[DEBUG] Dessin du titre pour la famille ${family._id}`);
@@ -274,7 +279,7 @@ async function generateFamilyImage(client, guildId, userId) {
         ctx.fillStyle = '#ffffff';
         ctx.font = '26px "MyCustomFont", sans-serif'; // Utiliser l'alias et un fallback générique
         ctx.textAlign = 'center';
-        ctx.fillText(String(`Lignée des ${family.familyName.toUpperCase()}`), 400, 45);
+        ctx.fillText(String(`Lignée des ${family.familyName.toUpperCase()}`), centerX, 45);
         ctx.restore();
     }
 
@@ -293,9 +298,10 @@ async function generateFamilyImage(client, guildId, userId) {
         ctx.beginPath(); ctx.moveTo(centerX, centerY - 35); ctx.lineTo(xPos, 130 + 35); ctx.stroke();
     }
 
-    const childrenDataLines = (userData.children || []).slice(0, 5);
+    const childrenDataLines = childrenData;
     for (let i = 0; i < childrenDataLines.length; i++) {
-        const xPos = centerX + (i - (childrenDataLines.length - 1) / 2) * (childrenDataLines.length > 1 ? 740 / (Math.max(1, childrenDataLines.length - 1)) : 0); // Éviter division par zéro
+        const spread = canvasWidth - 100;
+        const xPos = centerX + (i - (childrenDataLines.length - 1) / 2) * (childrenDataLines.length > 1 ? spread / (Math.max(1, childrenDataLines.length - 1)) : 0);
         ctx.beginPath(); ctx.moveTo(centerX, centerY + 35); ctx.lineTo(xPos, 430 - 35); ctx.stroke();
     }
     ctx.restore();
@@ -307,10 +313,10 @@ async function generateFamilyImage(client, guildId, userId) {
         const xPos = centerX - 130 + (i * 260);
         await drawNode(parents[i], xPos, 130, parents[i] === userData.father ? "Père" : "Mère");
     }
-    const childrenData = (userData.children || []).slice(0, 5);
-    for (let i = 0; i < childrenData.length; i++) {
-        const xPos = centerX + (i - (childrenData.length - 1) / 2) * (childrenData.length > 1 ? 740 / Math.max(1, childrenData.length - 1) : 0); // Éviter division par zéro
-        await drawNode(childrenData[i], xPos, 430, "Enfant");
+    for (let i = 0; i < childrenDataLines.length; i++) {
+        const spread = canvasWidth - 100;
+        const xPos = centerX + (i - (childrenDataLines.length - 1) / 2) * (childrenDataLines.length > 1 ? spread / Math.max(1, childrenDataLines.length - 1) : 0);
+        await drawNode(childrenDataLines[i], xPos, 430, "Enfant");
     }
     
     await drawNode(userId, centerX, centerY, "Moi", '#5865F2');
@@ -758,7 +764,7 @@ client.on('messageCreate', async (message) => {
     
     // On définit les commandes dont on veut garder la trace (social et info)
     // Seuls help, account, familytop et les interactions sociales restent affichés.
-    const persistentCommands = ['help', 'account', 'familytop', 'ask', 'end', 'marry', 'divorce', 'love-calc', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold'];
+    const persistentCommands = ['help', 'account', 'familytop', 'familyhistory', 'fh', 'ask', 'end', 'marry', 'divorce', 'love-calc', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold'];
 
     // Suppression automatique du message utilisateur si la commande n'est pas persistante
     if (!persistentCommands.includes(command)) safeDelete(message);
@@ -1404,6 +1410,7 @@ client.on('messageCreate', async (message) => {
                             await db.updateFamily(guildId, authorFamily.familyName, { members: authorFamily.members });
                         }
                         finalFamilyName = currentAuthorData.familyName;
+                        await db.addFamilyLog(guildId, finalFamilyName, `💍 <@${target.id}> a rejoint la lignée par mariage avec <@${authorId}>`);
                         congratulationsText = `🎉 Félicitations ! **${formatMention(target.id)}** rejoint avec amour la lignée des **${currentAuthorData.familyName.toUpperCase()}** aux côtés de **${formatMention(authorId)}** !`;
                     } else if (!authorHasFamily && targetHasFamily) {
                         // Scenario 3: Target has family, author does not - author joins target's family
@@ -1414,14 +1421,17 @@ client.on('messageCreate', async (message) => {
                             await db.updateFamily(guildId, targetFamily.familyName, { members: targetFamily.members });
                         }
                         finalFamilyName = currentTargetData.familyName;
+                        await db.addFamilyLog(guildId, finalFamilyName, `💍 <@${authorId}> a rejoint la lignée par mariage avec <@${target.id}>`);
                         congratulationsText = `🎉 Quelle joie ! **${formatMention(authorId)}** intègre la famille **${currentTargetData.familyName.toUpperCase()}** par les liens sacrés du mariage avec **${formatMention(target.id)}** !`;
                     } else if (authorHasFamily && targetHasFamily && currentAuthorData.familyName !== currentTargetData.familyName) {
                         // Scenario 4: Both have different families - merge families
                         await mergeFamilies(guildId, currentAuthorData.familyName, currentTargetData.familyName, authorId, target.id, 'conjoint');
                         finalFamilyName = currentAuthorData.familyName;
+                        await db.addFamilyLog(guildId, finalFamilyName, `🤝 Fusion avec la famille de <@${target.id}> suite au mariage`);
                         congratulationsText = `🤝 Une alliance historique ! Les familles ont fusionné en la dynastie **${finalFamilyName.toUpperCase()}** pour célébrer l'union de **${formatMention(authorId)}** et **${formatMention(target.id)}** !`;
                     } else if (authorHasFamily && targetHasFamily && currentAuthorData.familyName === currentTargetData.familyName) {
                         finalFamilyName = currentAuthorData.familyName;
+                        await db.addFamilyLog(guildId, finalFamilyName, `💖 Union interne renforcée entre <@${authorId}> et <@${target.id}>`);
                         congratulationsText = `💖 L'amour reste dans la famille ! **${formatMention(authorId)}** et **${formatMention(target.id)}** renforcent les liens de la lignée **${finalFamilyName.toUpperCase()}** en s'unissant officiellement !`;
                     }
 

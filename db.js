@@ -89,7 +89,8 @@ async function createFamily(guildId, familyName, headId) {
     familyName: familyName.toLowerCase(),
     head: headId,
     members: [headId],
-    createdAt: new Date()
+    createdAt: new Date(),
+    history: [{ action: `Famille créée par <@${headId}>`, date: new Date() }]
   };
   await familiesCollection.insertOne(family);
   return family;
@@ -122,6 +123,10 @@ async function clearUserFamilyLinksDB(guildId, userId) {
     const family = await getFamily(guildId, userData.familyName);
     if (family) {
       family.members = family.members.filter(id => id !== userId);
+      
+      // Enregistrement du départ dans l'historique
+      await addFamilyLog(guildId, familyName, `<@${userId}> a quitté ou a été retiré de la famille.`);
+
       if (family.head === userId) {
         if (family.members.length === 0) {
           await deleteFamily(guildId, family.familyName);
@@ -152,6 +157,14 @@ async function clearUserFamilyLinksDB(guildId, userId) {
   await updateUser(guildId, userId, { spouse: null, children: [], mother: null, father: null, customLinks: {}, familyName: null });
 }
 
+async function addFamilyLog(guildId, familyName, message) {
+    if (!familyName) return;
+    await familiesCollection.updateOne(
+        { _id: `${guildId}_${familyName.toLowerCase()}` },
+        { $push: { history: { $each: [{ action: message, date: new Date() }], $slice: -15 } } }
+    );
+}
+
 module.exports = {
   connectDB,
   getOrCreateUser,
@@ -164,5 +177,6 @@ module.exports = {
   deleteFamily,
   getAllFamilies,
   clearUserFamilyLinksDB,
-  resetDatabase
+  resetDatabase,
+  addFamilyLog
 };
