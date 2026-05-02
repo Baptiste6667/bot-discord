@@ -89,6 +89,49 @@ async function updateUBBalance(guildId, userId, cashDelta) {
     }
 }
 
+/**
+ * Helper pour envoyer l'affichage de l'arbre généalogique
+ */
+async function sendFamilyDisplay(ctx, guildId, targetId, isGlobal = false) {
+    const targetData = await db.getOrCreateUser(guildId, targetId);
+    if (!targetData.familyName) return;
+
+    const family = await db.getFamily(guildId, targetData.familyName);
+    if (!family) return;
+
+    const [buffer, ext, membersWealth] = await Promise.all([
+        generateFamilyImage(client, guildId, targetId),
+        getExtendedFamily(guildId, targetId),
+        Promise.all(family.members.map(id => getUBUser(guildId, id)))
+    ]);
+
+    const totalWealth = membersWealth.reduce((acc, res) => acc + (res ? res.cash : 0), 0);
+    const spouseText = targetData.spouse ? formatMention(targetData.spouse) : 'Célibataire';
+    const parentsText = [targetData.father, targetData.mother].filter(p => !!p).map(formatMention).join(', ') || 'Inconnus';
+    const childrenText = (targetData.children || []).map(formatMention).join(', ') || 'Aucun';
+    const attachment = new AttachmentBuilder(buffer, { name: 'family.png' });
+
+    const embed = new EmbedBuilder()
+        .setTitle(isGlobal ? `🌳 Lignée Complète : ${family.familyName.toUpperCase()}` : `🌿 Ma Branche : ${family.familyName.toUpperCase()}`)
+        .setColor('#5865F2')
+        .setImage('attachment://family.png')
+        .addFields(
+            { name: '👑 Chef de Lignée', value: formatMention(family.head), inline: true },
+            { name: '👥 Population', value: `${family.members.length} membre(s)`, inline: true },
+            { name: '💰 Fortune Totale', value: `**${totalWealth.toLocaleString()}** cr.`, inline: true },
+            { name: '📅 Création', value: family.createdAt ? new Date(family.createdAt).toLocaleDateString('fr-FR') : 'Inconnue', inline: true },
+            { name: '💍 Union', value: spouseText, inline: true },
+            { name: '👨‍👩‍👧 Lignée Directe', value: `**Parents:** ${parentsText}\n**Enfants:** ${childrenText}`, inline: false },
+            { name: '🌳 Parenté Étendue', value: `**Fratrie:** ${Array.from(ext.siblings).map(formatMention).join(', ') || 'Aucun'} | **Grands-Parents:** ${Array.from(ext.grandparents).map(formatMention).join(', ') || 'Aucun'} | **Oncles/Tantes:** ${Array.from(ext.unclesAunts).map(formatMention).join(', ') || 'Aucun'} | **Cousins:** ${Array.from(ext.cousins).map(formatMention).join(', ') || 'Aucun'}`, inline: false }
+        ).setTimestamp();
+
+    if (ctx.isChatInputCommand?.() || ctx.isButton?.() || ctx.isStringSelectMenu?.()) {
+        return ctx.followUp({ embeds: [embed], files: [attachment] });
+    } else {
+        return ctx.channel.send({ embeds: [embed], files: [attachment] });
+    }
+}
+
 // --- Visual Tree Generator ---
 async function generateFamilyImage(client, guildId, userId) {
     console.log(`[DEBUG] Début génération image pour : ${userId}`);
@@ -565,7 +608,7 @@ async function startFamilyVote(guildId, interaction, author, target, role, actio
     collector.on('end', async () => {
         if (votesYes.size > votesNo.size) {
             if (action === 'remove') {
-                await executeLinkChange(guildId, author.id, target.id, role, 'remove');
+                await db.clearUserFamilyLinksDB(guildId, target.id);
                 await interaction.deleteReply();
                 await interaction.channel.send(`✅ **Vote validé !** Lien rompu entre ${author} et ${target}.`);
             } else {
@@ -825,40 +868,7 @@ client.on('messageCreate', async (message) => {
                     if (!family || !targetId) return message.reply({ embeds: [errorEmbed("Famille introuvable (utilisez un nom, une mention ou un ID).")] });
                     
                     // Si c'est une demande de lignée complète, on part du chef
-                    if (isGlobalArg) targetId = family.head;
-
-                    const [buffer, ext, targetData, membersWealth] = await Promise.all([
-                        generateFamilyImage(client, guildId, targetId),
-                        getExtendedFamily(guildId, targetId),
-                        db.getOrCreateUser(guildId, targetId),
-                        Promise.all(family.members.map(id => getUBUser(message.guild.id, id)))
-                    ]);
-
-                    const totalWealth = membersWealth.reduce((acc, res) => acc + (res ? res.cash : 0), 0);
-                    const spouseText = targetData.spouse ? formatMention(targetData.spouse) : 'Célibataire';
-                    const parentsText = [targetData.father, targetData.mother].filter(p => !!p).map(formatMention).join(', ') || 'Inconnus';
-                    const childrenText = (targetData.children || []).map(formatMention).join(', ') || 'Aucun';
-
-                    const attachment = new AttachmentBuilder(buffer, { name: 'family.png' });
-                    const displayTitle = family.familyName.toUpperCase();
-                    
-                    embed = new EmbedBuilder()
-                        .setTitle(isGlobalArg ? `🌳 Lignée Complète : ${displayTitle}` : `🌿 Ma Branche : ${displayTitle}`)
-                        .setColor('#5865F2')
-                        .setImage('attachment://family.png')
-                        .addFields(
-                            { name: '👑 Chef de Lignée', value: formatMention(family.head), inline: true },
-                            { name: '👥 Population', value: `${family.members.length} membre(s)`, inline: true },
-                            { name: '💰 Fortune Totale', value: `**${totalWealth.toLocaleString()}** cr.`, inline: true },
-                            { name: '📅 Création', value: family.createdAt ? new Date(family.createdAt).toLocaleDateString('fr-FR') : 'Inconnue', inline: true },
-                            { name: '� Union', value: spouseText, inline: true },
-                            { name: '👨‍👩‍👧 Lignée Directe', value: `**Parents:** ${parentsText}\n**Enfants:** ${childrenText}`, inline: false },
-                            { name: '🌳 Parenté Étendue', value: `**Fratrie:** ${Array.from(ext.siblings).map(formatMention).join(', ') || 'Aucun'} | **Grands-Parents:** ${Array.from(ext.grandparents).map(formatMention).join(', ') || 'Aucun'} | **Oncles/Tantes:** ${Array.from(ext.unclesAunts).map(formatMention).join(', ') || 'Aucun'} | **Cousins:** ${Array.from(ext.cousins).map(formatMention).join(', ') || 'Aucun'}`, inline: false }
-                        )
-                        .setFooter({ text: `Consulté par ${message.author.username}` })
-                        .setTimestamp();
-
-                    const sentFam = await message.channel.send({ embeds: [embed], files: [attachment] });
+                    await sendFamilyDisplay(message, guildId, isGlobalArg ? family.head : targetId, isGlobalArg);
                     return; // Ne pas supprimer
                 }
 
@@ -904,7 +914,7 @@ client.on('messageCreate', async (message) => {
                 }
 
                 const msg = await message.channel.send({ embeds: [embed], components: rows });
-                const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['fam_action', 'create_fam', 'cancel_main', 'view_branch', 'view_global'].includes(i.customId), time: 120000 });
+                const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['fam_action', 'create_fam', 'cancel_main', 'view_branch', 'view_global', 'confirm_del'].includes(i.customId), time: 120000 });
                 
                 collector.on('collect', async (i) => {
                     if (i.customId === 'cancel_main' || (i.isStringSelectMenu() && i.values?.[0] === 'cancel')) {
@@ -916,35 +926,8 @@ client.on('messageCreate', async (message) => {
                     await i.deferUpdate();
                     const family = await db.getFamily(guildId, authorData.familyName);
                     const targetId = i.customId === 'view_global' ? family.head : authorId;
-                    
-                    const [buffer, ext, targetData, membersWealth] = await Promise.all([
-                        generateFamilyImage(client, guildId, targetId),
-                        getExtendedFamily(guildId, targetId),
-                        db.getOrCreateUser(guildId, targetId),
-                        Promise.all(family.members.map(id => getUBUser(i.guild.id, id)))
-                    ]);
-
-                    const totalWealth = membersWealth.reduce((acc, res) => acc + (res ? res.cash : 0), 0);
-                    const spouseText = targetData.spouse ? formatMention(targetData.spouse) : 'Célibataire';
-                    const parentsText = [targetData.father, targetData.mother].filter(p => !!p).map(formatMention).join(', ') || 'Inconnus';
-                    const childrenText = (targetData.children || []).map(formatMention).join(', ') || 'Aucun';
-                    
-                    const attachment = new AttachmentBuilder(buffer, { name: 'family.png' });
-                    embed = new EmbedBuilder()
-                        .setTitle(i.customId === 'view_global' ? `🌳 Lignée Complète : ${family.familyName.toUpperCase()}` : `🌿 Ma Branche : ${family.familyName.toUpperCase()}`)
-                        .setColor('#5865F2')
-                        .setImage('attachment://family.png')
-                        .addFields(
-                            { name: '👑 Chef de Lignée', value: formatMention(family.head), inline: true },
-                            { name: '👥 Population', value: `${family.members.length} membre(s)`, inline: true },
-                            { name: '💰 Fortune Totale', value: `**${totalWealth.toLocaleString()}** cr.`, inline: true },
-                            { name: '📅 Création', value: family.createdAt ? new Date(family.createdAt).toLocaleDateString('fr-FR') : 'Inconnue', inline: true },
-                            { name: '💍 Union', value: spouseText, inline: true },
-                            { name: '👨‍👩‍👧 Lignée Directe', value: `**Parents:** ${parentsText}\n**Enfants:** ${childrenText}`, inline: false },
-                            { name: '🌳 Parenté Étendue', value: `**Fratrie:** ${Array.from(ext.siblings).map(formatMention).join(', ') || 'Aucun'} | **Grands-Parents:** ${Array.from(ext.grandparents).map(formatMention).join(', ') || 'Aucun'} | **Oncles/Tantes:** ${Array.from(ext.unclesAunts).map(formatMention).join(', ') || 'Aucun'} | **Cousins:** ${Array.from(ext.cousins).map(formatMention).join(', ') || 'Aucun'}`, inline: false }
-                        )
-                        .setTimestamp();
-                    return i.followUp({ embeds: [embed], files: [attachment] });
+                    await sendFamilyDisplay(i, guildId, targetId, i.customId === 'view_global');
+                    return;
                 }
                 
                 if (i.customId === 'create_fam') {
@@ -960,7 +943,6 @@ client.on('messageCreate', async (message) => {
                 }
                 
                 if (i.customId === 'confirm_del') {
-                    await i.deferUpdate();
                     const family = await db.getFamily(guildId, authorData.familyName);
                     if (family) {
                         for (const mId of family.members) {
@@ -970,6 +952,7 @@ client.on('messageCreate', async (message) => {
                         await msg.delete().catch(() => {});
                         return i.channel.send({ embeds: [successEmbed(`La famille **${family.familyName.toUpperCase()}** a été dissoute.`)] });
                     }
+                    return;
                 }
 
                 if (action === 'leave') {
