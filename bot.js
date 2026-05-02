@@ -1240,13 +1240,48 @@ client.on('messageCreate', async (message) => {
             for (const char of "truelove") letterScore += (combinedNames.split(char).length - 1);
             const idHash = (parseInt(u1.id.slice(-7)) ^ parseInt(u2.id.slice(-7)));
             const score = Math.abs((letterScore * 73 + idHash)) % 101;
+            
+            let comment = "";
+            let color = "#747d8c";
+
+            if (score === 100) {
+                comment = "⚡ **ALERTE NUCLÉAIRE : 100% !** Vous êtes soit des clones, soit vous avez hacké mon code. C'est flippant, marriez-vous tout de suite !";
+                color = "#ff0000";
+            } else if (score >= 90) {
+                comment = "🔥 **C'est l'amour atomique !** Préparez les faire-part, le gâteau et le labrador. Le serveur n'est pas prêt pour autant de love.";
+                color = "#ff4757";
+            } else if (score >= 80) {
+                comment = "💎 **Un duo de choc !** Le destin a fait du bon boulot (ou vous avez triché sur vos pseudos). Vous brillez plus qu'un diamant poli.";
+                color = "#ff6b81";
+            } else if (score >= 60) {
+                comment = "🌈 **Y'a du potentiel !** Vous pourriez survivre à un dîner de famille sans vous jeter les fourchettes au visage. C'est déjà beau.";
+                color = "#ffa502";
+            } else if (score >= 40) {
+                comment = "🛋️ **La Zone de Confort.** C'est stable, comme un vieux canapé : pas très excitant, mais on s'y sent bien (ou alors c'est la friendzone).";
+                color = "#eccc68";
+            } else if (score >= 20) {
+                comment = "🌵 **Aïe.** À ce stade, même une plante verte a plus d'affinités avec vous. Va falloir ramer très fort pour faire avancer le bateau.";
+                color = "#f1c40f";
+            } else {
+                comment = "🛑 **ZONE DE DANGER.** Même l'eau et l'huile s'entendent mieux que vous. L'algorithme suggère de rester à au moins 5 km de distance.";
+                color = "#747d8c";
+            }
+
             const bar = "❤️".repeat(Math.floor(score / 10)) + "🖤".repeat(10 - Math.floor(score / 10));
 
             const loveEmbed = new EmbedBuilder()
-                .setTitle("🔬 Analyse de Compatibilité Systémique")
-                .setColor(score > 50 ? "#ff4757" : "#747d8c")
-                .setDescription(`Analyse pour **${u1.username}** et **${u2.username}**.\n\n**Score : ${score}%**\n${bar}`)
-                .setFooter({ text: "Moteur analytique Dynastie v3.0.1" });
+                .setTitle("🔬 Rapport d'Expertise en Compatibilité")
+                .setColor(color)
+                .setThumbnail("https://media.giphy.com/media/l41lTfuxV6Zoopow8/giphy.gif")
+                .setDescription(`Analyse probabiliste pour **${u1.username}** et **${u2.username}**.`)
+                .addFields(
+                    { name: "📊 Résultat du Scan", value: `**${score}%**\n${bar}`, inline: false },
+                    { name: "💬 Conclusion du Bot", value: comment, inline: false },
+                    { name: "📉 Données Techniques", value: `• Affinité Nominale: ${((score * 7) % 31 + 60)}%\n• Résonance ID: ${((score * 13) % 41 + 50)}%`, inline: false }
+                )
+                .setFooter({ text: "Moteur analytique Dynastie v3.1.0" })
+                .setTimestamp();
+
             return message.channel.send({ embeds: [loveEmbed] });
         }
 
