@@ -1235,11 +1235,65 @@ client.on('messageCreate', async (message) => {
             else { const iter = mentions.values(); u1 = iter.next().value; u2 = iter.next().value; }
             if (u1.id === u2.id) return message.reply("L'algorithme nécessite deux entités distinctes !");
 
-            const combinedNames = (u1.username + u2.username).toLowerCase().replace(/[^a-z]/g, '');
-            let letterScore = 0;
-            for (const char of "truelove") letterScore += (combinedNames.split(char).length - 1);
-            const idHash = (parseInt(u1.id.slice(-7)) ^ parseInt(u2.id.slice(-7)));
-            const score = Math.abs((letterScore * 73 + idHash)) % 101;
+            // Récupération des données pour une analyse contextuelle "précise"
+            const u1Data = await db.getOrCreateUser(guildId, u1.id);
+            const u2Data = await db.getOrCreateUser(guildId, u2.id);
+
+            // --- ALGORITHME DE RÉDUCTION ITÉRATIVE (Love Calculator Classic) ---
+            const name1 = u1.username.toLowerCase().replace(/[^a-z0-9]/g, '');
+            const name2 = u2.username.toLowerCase().replace(/[^a-z0-9]/g, '');
+            
+            // On ajoute un "sel" basé sur les IDs pour que le calcul soit unique aux comptes
+            // et pas seulement aux pseudos
+            const idSalt = (parseInt(u1.id.slice(-3)) + parseInt(u2.id.slice(-3))).toString();
+            const combined = name1 + name2 + idSalt;
+            
+            // Étape 1 : Compter les occurrences de chaque lettre dans l'ordre d'apparition
+            const counts = [];
+            const seen = new Set();
+            for (const char of combined) {
+                if (!seen.has(char)) {
+                    seen.add(char);
+                    const count = combined.split(char).length - 1;
+                    counts.push(count);
+                }
+            }
+
+            // Étape 2 : Réduction itérative (Somme des extrémités)
+            let sequence = [...counts];
+            while (sequence.length > 2) {
+                const nextStep = [];
+                let left = 0;
+                let right = sequence.length - 1;
+
+                while (left <= right) {
+                    if (left === right) {
+                        nextStep.push(sequence[left]);
+                    } else {
+                        const sum = sequence[left] + sequence[right];
+                        if (sum >= 10) {
+                            // On décompose la somme en chiffres individuels (ex: 12 -> 1, 2)
+                            nextStep.push(Math.floor(sum / 10));
+                            nextStep.push(sum % 10);
+                        } else {
+                            nextStep.push(sum);
+                        }
+                    }
+                    left++;
+                    right--;
+                }
+                sequence = nextStep;
+            }
+
+            let score = parseInt(sequence.join('')) || 0;
+
+            // --- CALCUL DES BONUS CONTEXTUELS (La partie "Précise") ---
+            // Bonus si déjà en couple/mariés (+10%)
+            if (u1Data.spouse === u2.id || u1Data.couple === u2.id) score += 10;
+            // Bonus si dans la même famille (+5%)
+            if (u1Data.familyName && u1Data.familyName === u2Data.familyName) score += 5;
+            
+            score = Math.min(100, score); // Cap à 100%
             
             let comment = "";
             let color = "#747d8c";
@@ -1277,7 +1331,7 @@ client.on('messageCreate', async (message) => {
                 .addFields(
                     { name: "📊 Résultat du Scan", value: `**${score}%**\n${bar}`, inline: false },
                     { name: "💬 Conclusion du Bot", value: comment, inline: false },
-                    { name: "📉 Données Techniques", value: `• Affinité Nominale: ${((score * 7) % 31 + 60)}%\n• Résonance ID: ${((score * 13) % 41 + 50)}%`, inline: false }
+                    { name: "📉 Données Techniques", value: `• Affinité Nominale: ${((score * 7) % 31 + 60)}%\n• Résonance ID: ${((score * 13) % 41 + 50)}%\n• Bonus de Relation: ${u1Data.spouse === u2.id ? "Activé (Mariage)" : (u1Data.couple === u2.id ? "Activé (Couple)" : "Aucun")}`, inline: false }
                 )
                 .setFooter({ text: "Moteur analytique Dynastie v3.1.0" })
                 .setTimestamp();
