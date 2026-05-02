@@ -60,6 +60,45 @@ const clearUserFamilyLinks = async (guildId, userId) => await db.clearUserFamily
 const safeDelete = (msg) => msg && typeof msg.delete === 'function' ? msg.delete().catch(() => {}) : null;
 const autoDelete = (msg, time = 30000) => setTimeout(() => safeDelete(msg), time);
 
+const getGif = (action) => {
+    const gifs = GIF_LIBRARY[action];
+    if (!gifs) return null;
+    return Array.isArray(gifs) ? gifs[Math.floor(Math.random() * gifs.length)] : gifs;
+};
+
+/** --- BIBLIOTHÈQUE DE GIFS --- **/
+const GIF_LIBRARY = {
+    marry_accept: ['https://media.giphy.com/media/m9SULzJXS6lRhRmB4o/giphy.gif'],
+    marry_decline: ['https://media.giphy.com/media/7T33BLlB7NQrjozoRB/giphy.gif'],
+    hug: [
+        'https://media.giphy.com/media/u9B3S2ArX9X5S/giphy.gif',
+        'https://media.giphy.com/media/3M4NpbLCTxBqU/giphy.gif',
+        'https://media.giphy.com/media/wnXz0N0iS3fHy/giphy.gif'
+    ],
+    kiss: [
+        'https://media.giphy.com/media/G3va31WfEKhS8/giphy.gif',
+        'https://media.giphy.com/media/K7YvY29Xh7hD2/giphy.gif',
+        'https://media.giphy.com/media/119i1S6Wp4sh56/giphy.gif'
+    ],
+    pat: [
+        'https://media.giphy.com/media/ARSp9T7wwxNcs/giphy.gif',
+        'https://media.giphy.com/media/5tmRh1obzf3fW/giphy.gif',
+        'https://media.giphy.com/media/ye7OTLw6EAsA8/giphy.gif'
+    ],
+    slap: [
+        'https://media.giphy.com/media/uG3lKscP9lE1W/giphy.gif',
+        'https://media.giphy.com/media/Zau0yrl17uzdEXqzjZ/giphy.gif',
+        'https://media.giphy.com/media/Gf3AUz3eBNbTW/giphy.gif'
+    ],
+    poke: ['https://media.giphy.com/media/1X7Ag3SAsZ2Gk/giphy.gif', 'https://media.giphy.com/media/3YZ7A9hU8wTLO/giphy.gif'],
+    tickle: ['https://media.giphy.com/media/v0reFosH7N8m4/giphy.gif', 'https://media.giphy.com/media/3v9yqZat2O7XW/giphy.gif'],
+    bite: ['https://media.giphy.com/media/O9HeC68S69hPa/giphy.gif', 'https://media.giphy.com/media/vUrwX6Gv6vS6s/giphy.gif'],
+    dance: ['https://media.giphy.com/media/1082yS2HMbLMSQ/giphy.gif', 'https://media.giphy.com/media/UptY0pDk48n0A/giphy.gif'],
+    cuddle: ['https://media.giphy.com/media/lrr96YS85KkNi/giphy.gif', 'https://media.giphy.com/media/49mdjsMrH7oze/giphy.gif'],
+    highfive: ['https://media.giphy.com/media/26ufgSwMRqauQWqL6/giphy.gif', 'https://media.giphy.com/media/5SByS3mRz5r2M/giphy.gif'],
+    handhold: ['https://media.giphy.com/media/6YfMIn9680i9G/giphy.gif', 'https://media.giphy.com/media/YvMsc7zUvVfMc/giphy.gif']
+};
+
 // --- UnbelievaBoat API Helper ---
 // Configuration de l'instance Axios pour communiquer directement avec l'API v1
 const ubApi = axios.create({
@@ -1185,7 +1224,7 @@ client.on('messageCreate', async (message) => {
                         .setTitle('🎊 Un Mariage Céleste !')
                         .setColor('#FF69B4')
                         .setDescription(congratulationsText)
-                        .setImage('https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHYzeXN6bmN6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/m9SULzJXS6lRhRmB4o/giphy.gif')
+                        .setImage(GIF_LIBRARY.marry_accept)
                         .setFooter({ text: 'Vive les mariés !' })
                         .setTimestamp();
 
@@ -1198,7 +1237,7 @@ client.on('messageCreate', async (message) => {
                         .setTitle('💔 Un Coeur Brisé...')
                         .setColor('#95a5a6')
                         .setDescription(`L'amour n'est pas au rendez-vous aujourd'hui... ${formatMention(target.id)} a poliment décliné la proposition de ${formatMention(authorId)}.`)
-                        .setThumbnail('https://media.giphy.com/media/7T33BLlB7NQrjozoRB/giphy.gif')
+                        .setImage(GIF_LIBRARY.marry_decline)
                         .setFooter({ text: 'Peut-être une prochaine fois ?' });
 
                     await i.followUp({ embeds: [declineEmbed] });
@@ -1370,9 +1409,35 @@ client.on('messageCreate', async (message) => {
         }
 
         case 'divorce': {
-            if (!authorData.spouse) return message.reply('Tu n\'es pas marié(e).'); // La réponse est persistante
-            await executeLinkChange(guildId, authorId, authorData.spouse, null, 'remove');
-            return message.reply(`💔 ${formatMention(authorId)} a divorcé de ${formatMention(authorData.spouse)}.`); // La réponse est persistante
+            if (!authorData.spouse) return message.reply('Tu n\'es pas marié(e).');
+            const targetId = authorData.spouse;
+
+            const confirmEmbed = new EmbedBuilder()
+                .setTitle("💔 Confirmation de Divorce")
+                .setColor("#ff4757")
+                .setDescription(`Es-tu certain(e) de vouloir divorcer de ${formatMention(targetId)} ?\n\n*Cette action rompra vos liens officiels.*`);
+
+            const row = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('confirm_divorce').setLabel('Confirmer').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('cancel_divorce').setLabel('Annuler').setStyle(ButtonStyle.Secondary)
+            );
+
+            const msg = await message.reply({ embeds: [confirmEmbed], components: [row] });
+            const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
+
+            collector.on('collect', async (i) => {
+                if (i.customId === 'confirm_divorce') {
+                    await executeLinkChange(guildId, authorId, targetId, null, 'remove');
+                    await i.update({ embeds: [successEmbed(`💔 ${formatMention(authorId)} a divorcé de ${formatMention(targetId)} !`)], components: [] });
+                } else {
+                    await i.update({ embeds: [errorEmbed("Divorce annulé.")], components: [] });
+                    setTimeout(() => msg.delete().catch(() => {}), 5000);
+                }
+                collector.stop();
+            });
+
+            collector.on('end', (collected, reason) => { if (reason === 'time') msg.delete().catch(() => {}); });
+            return;
         }
 
         case 'hug': {
@@ -1385,7 +1450,7 @@ client.on('messageCreate', async (message) => {
             const embed = new EmbedBuilder()
                 .setColor('#FFC0CB')
                 .setDescription(desc)
-                .setImage('https://media.giphy.com/media/u9B3S2ArX9X5S/giphy.gif');
+                .setImage(getGif('hug'));
             return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
 
@@ -1397,7 +1462,7 @@ client.on('messageCreate', async (message) => {
             const embed = new EmbedBuilder()
                 .setColor('#FF0000')
                 .setDescription(`💋 ${formatMention(authorId)} embrasse amoureusement ${formatMention(target.id)} !`)
-                .setImage('https://media.giphy.com/media/G3va31WfEKhS8/giphy.gif');
+                .setImage(getGif('kiss'));
             return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
 
@@ -1411,7 +1476,7 @@ client.on('messageCreate', async (message) => {
             const embed = new EmbedBuilder()
                 .setColor('#87CEEB')
                 .setDescription(desc)
-                .setImage('https://media.giphy.com/media/ARSp9T7wwxNcs/giphy.gif');
+                .setImage(getGif('pat'));
             return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
 
@@ -1424,7 +1489,7 @@ client.on('messageCreate', async (message) => {
             const embed = new EmbedBuilder()
                 .setColor('#FFA500')
                 .setDescription(desc)
-                .setImage('https://media.giphy.com/media/uG3lKscP9lE1W/giphy.gif');
+                .setImage(getGif('slap'));
             return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
 
@@ -1437,7 +1502,7 @@ client.on('messageCreate', async (message) => {
             const embed = new EmbedBuilder()
                 .setColor('#98FB98')
                 .setDescription(desc)
-                .setImage('https://media.giphy.com/media/1X7Ag3SAsZ2Gk/giphy.gif');
+                .setImage(getGif('poke'));
             return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
 
@@ -1446,7 +1511,7 @@ client.on('messageCreate', async (message) => {
             const rel = await areRelated(guildId, authorId, target.id);
             let desc = `🤣 ${formatMention(authorId)} chatouille ${formatMention(target.id)} jusqu'à ce qu'il/elle n'en puisse plus !`;
             if (rel && rel !== 'soi-même') desc += ` Les rires en famille sont précieux !`;
-            const embed = new EmbedBuilder().setColor('#FFD700').setDescription(desc).setImage('https://media.giphy.com/media/v0reFosH7N8m4/giphy.gif');
+            const embed = new EmbedBuilder().setColor('#FFD700').setDescription(desc).setImage(getGif('tickle'));
             return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
 
@@ -1455,14 +1520,14 @@ client.on('messageCreate', async (message) => {
             const rel = await areRelated(guildId, authorId, target.id);
             let desc = `🦷 Nom ! ${formatMention(authorId)} a mordu ${formatMention(target.id)} !`;
             if (rel === 'conjoint(e)') desc = `🦷 ${formatMention(authorId)} donne un petit mordillement amoureux à ${formatMention(target.id)}...`;
-            const embed = new EmbedBuilder().setColor('#8B0000').setDescription(desc).setImage('https://media.giphy.com/media/O9HeC68S69hPa/giphy.gif');
+            const embed = new EmbedBuilder().setColor('#8B0000').setDescription(desc).setImage(getGif('bite'));
             return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
 
         case 'dance': {
             if (!target) return message.reply('Avec qui veux-tu danser ?'); // La réponse est persistante
             const desc = `💃 ${formatMention(authorId)} entraîne ${formatMention(target.id)} dans une danse endiablée !`;
-            const embed = new EmbedBuilder().setColor('#FF69B4').setDescription(desc).setImage('https://media.giphy.com/media/1082yS2HMbLMSQ/giphy.gif');
+            const embed = new EmbedBuilder().setColor('#FF69B4').setDescription(desc).setImage(getGif('dance'));
             return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
 
@@ -1471,14 +1536,14 @@ client.on('messageCreate', async (message) => {
             const rel = await areRelated(guildId, authorId, target.id);
             let desc = `🧸 ${formatMention(authorId)} fait un câlin tout doux à ${formatMention(target.id)}.`;
             if (['enfant', 'parent'].includes(rel)) desc = `🧸 ${formatMention(authorId)} serre tendrement son **${rel}** contre lui.`;
-            const embed = new EmbedBuilder().setColor('#DEB887').setDescription(desc).setImage('https://media.giphy.com/media/lrr96YS85KkNi/giphy.gif');
+            const embed = new EmbedBuilder().setColor('#DEB887').setDescription(desc).setImage(getGif('cuddle'));
             return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
 
         case 'highfive': {
             if (!target) return message.reply('À qui veux-tu taper m\'en cinq ?'); // La réponse est persistante
             const desc = `🙌 ${formatMention(authorId)} et ${formatMention(target.id)} se tapent m'en cinq ! Quel duo !`;
-            const embed = new EmbedBuilder().setColor('#00FF7F').setDescription(desc).setImage('https://media.giphy.com/media/26ufgSwMRqauQWqL6/giphy.gif');
+            const embed = new EmbedBuilder().setColor('#00FF7F').setDescription(desc).setImage(getGif('highfive'));
             return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
 
@@ -1487,7 +1552,7 @@ client.on('messageCreate', async (message) => {
             const rel = await areRelated(guildId, authorId, target.id);
             let desc = `🤝 ${formatMention(authorId)} prend la main de ${formatMention(target.id)}.`;
             if (rel === 'conjoint(e)') desc = `🤝 ${formatMention(authorId)} tient amoureusement la main de ${formatMention(target.id)}.`;
-            const embed = new EmbedBuilder().setColor('#F0E68C').setDescription(desc).setImage('https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHpueG8ycWV6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/6YfMIn9680i9G/giphy.gif');
+            const embed = new EmbedBuilder().setColor('#F0E68C').setDescription(desc).setImage(getGif('handhold'));
             return message.reply({ embeds: [embed] }); // La réponse est persistante
         }
     }
