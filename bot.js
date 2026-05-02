@@ -1137,7 +1137,7 @@ client.on('messageCreate', async (message) => {
 
                     const authorHasFamily = !!currentAuthorData.familyName;
                     const targetHasFamily = !!currentTargetData.familyName;
-
+                    let congratulationsText = "";
                     const adj = (currentAuthorData.gender === 'féminin' && currentTargetData.gender === 'féminin') ? 'mariées' : 'mariés';
                     let finalFamilyName = null;
 
@@ -1150,7 +1150,7 @@ client.on('messageCreate', async (message) => {
                         await db.updateUser(guildId, authorId, { familyName: newFamilyName });
                         await db.updateUser(guildId, target.id, { familyName: newFamilyName });
                         finalFamilyName = newFamilyName;
-                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant ${adj} et ont fondé la famille **${newFamilyName.toUpperCase()}** !` });
+                        congratulationsText = `🎉 Un nouveau foyer voit le jour ! **${formatMention(authorId)}** et **${formatMention(target.id)}** se sont dit "Oui" et fondent la famille **${newFamilyName.toUpperCase()}** !`;
                     } else if (authorHasFamily && !targetHasFamily) {
                         // Scenario 2: Author has family, target does not - target joins author's family
                         await db.updateUser(guildId, target.id, { familyName: currentAuthorData.familyName });
@@ -1160,7 +1160,7 @@ client.on('messageCreate', async (message) => {
                             await db.updateFamily(guildId, authorFamily.familyName, { members: authorFamily.members });
                         }
                         finalFamilyName = currentAuthorData.familyName;
-                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant ${adj} ! ${formatMention(target.id)} a rejoint la famille **${currentAuthorData.familyName.toUpperCase()}** !` });
+                        congratulationsText = `🎉 Félicitations ! **${formatMention(target.id)}** rejoint avec amour la lignée des **${currentAuthorData.familyName.toUpperCase()}** aux côtés de **${formatMention(authorId)}** !`;
                     } else if (!authorHasFamily && targetHasFamily) {
                         // Scenario 3: Target has family, author does not - author joins target's family
                         await db.updateUser(guildId, authorId, { familyName: currentTargetData.familyName });
@@ -1170,22 +1170,38 @@ client.on('messageCreate', async (message) => {
                             await db.updateFamily(guildId, targetFamily.familyName, { members: targetFamily.members });
                         }
                         finalFamilyName = currentTargetData.familyName;
-                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant ${adj} ! ${formatMention(authorId)} a rejoint la famille **${currentTargetData.familyName.toUpperCase()}** !` });
+                        congratulationsText = `🎉 Quelle joie ! **${formatMention(authorId)}** intègre la famille **${currentTargetData.familyName.toUpperCase()}** par les liens sacrés du mariage avec **${formatMention(target.id)}** !`;
                     } else if (authorHasFamily && targetHasFamily && currentAuthorData.familyName !== currentTargetData.familyName) {
                         // Scenario 4: Both have different families - merge families
                         await mergeFamilies(guildId, currentAuthorData.familyName, currentTargetData.familyName, authorId, target.id, 'conjoint');
                         finalFamilyName = currentAuthorData.familyName;
-                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant ${adj} et leurs familles ont fusionné en **${finalFamilyName.toUpperCase()}** !` });
+                        congratulationsText = `🤝 Une alliance historique ! Les familles ont fusionné en la dynastie **${finalFamilyName.toUpperCase()}** pour célébrer l'union de **${formatMention(authorId)}** et **${formatMention(target.id)}** !`;
                     } else if (authorHasFamily && targetHasFamily && currentAuthorData.familyName === currentTargetData.familyName) {
                         finalFamilyName = currentAuthorData.familyName;
-                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant ${adj} au sein de la famille **${finalFamilyName.toUpperCase()}** !` });
+                        congratulationsText = `💖 L'amour reste dans la famille ! **${formatMention(authorId)}** et **${formatMention(target.id)}** renforcent les liens de la lignée **${finalFamilyName.toUpperCase()}** en s'unissant officiellement !`;
                     }
+
+                    const acceptEmbed = new EmbedBuilder()
+                        .setTitle('🎊 Un Mariage Céleste !')
+                        .setColor('#FF69B4')
+                        .setDescription(congratulationsText)
+                        .setImage('https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHYzeXN6bmN6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/m9SULzJXS6lRhRmB4o/giphy.gif')
+                        .setFooter({ text: 'Vive les mariés !' })
+                        .setTimestamp();
 
                     // Establish the spouse link
                     await executeLinkChange(guildId, authorId, target.id, 'conjoint', 'add');
+                    await i.followUp({ embeds: [acceptEmbed] });
                     await msg.delete(); // Delete the proposal message
                 } else if (i.customId === 'm_decline') {
-                    await i.followUp({ content: `😔 ${formatMention(target.id)} a refusé la demande en mariage de ${formatMention(authorId)}.` });
+                    const declineEmbed = new EmbedBuilder()
+                        .setTitle('💔 Un Coeur Brisé...')
+                        .setColor('#95a5a6')
+                        .setDescription(`L'amour n'est pas au rendez-vous aujourd'hui... ${formatMention(target.id)} a poliment décliné la proposition de ${formatMention(authorId)}.`)
+                        .setThumbnail('https://media.giphy.com/media/7T33BLlB7NQrjozoRB/giphy.gif')
+                        .setFooter({ text: 'Peut-être une prochaine fois ?' });
+
+                    await i.followUp({ embeds: [declineEmbed] });
                     await msg.delete(); // Delete the proposal message
                 }
                 collector.stop();
