@@ -484,6 +484,17 @@ async function executeLinkChange(guildId, id1, id2, role, action) { // No longer
 
     if (role === 'conjoint') {
         d1Update.spouse = id2; d2Update.spouse = id1;
+
+        // Partage des enfants existants lors du mariage (famille recomposée)
+        const combinedChildren = [...new Set([...d1Update.children, ...d2Update.children])];
+        d1Update.children = combinedChildren;
+        d2Update.children = combinedChildren;
+
+        const role1 = d1.gender === 'féminin' ? 'mother' : 'father';
+        const role2 = d2.gender === 'féminin' ? 'mother' : 'father';
+        for (const childId of combinedChildren) {
+            await db.updateUser(guildId, childId, { [role1]: id1, [role2]: id2 });
+        }
     } else if (role === 'couple') {
         d1Update.couple = id2; d2Update.couple = id1;
     } else if (role === 'père' || role === 'mère') {
