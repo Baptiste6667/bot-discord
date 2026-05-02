@@ -438,98 +438,6 @@ async function areRelated(guildId, id1, id2) { // Made async
     return null;
 }
 
-// Function to get all members of a family
-async function getFamilyMembers(guildId, familyName) { // Made async
-    const normalizedFamilyName = familyName.toLowerCase();
-    const family = await db.getFamily(guildId, normalizedFamilyName);
-    if (family) {
-        return family.members;
-    }
-    return [];
-}
-
-// Function to get the head of a family
-async function getFamilyHead(guildId, familyName) { // Made async
-    const normalizedFamilyName = familyName.toLowerCase();
-    const family = await db.getFamily(guildId, normalizedFamilyName);
-    return family ? family.head : null;
-}
-
-// New function to merge two families
-async function mergeFamilies(guildId, inviterFamilyName, invitedFamilyName, inviterId, invitedId, role) { // Made async
-    const inviterFamily = await db.getFamily(guildId, inviterFamilyName);
-    const invitedFamily = await db.getFamily(guildId, invitedFamilyName);
-
-    if (!inviterFamily || !invitedFamily) {
-        console.error("Attempted to merge non-existent families.");
-        return;
-    }
-
-    // Add all members of the invited family to the inviter's family
-    for (const memberId of invitedFamily.members) {
-        if (!inviterFamily.members.includes(memberId)) {
-            inviterFamily.members.push(memberId);
-        }
-        // Update each member's familyName
-        await db.updateUser(guildId, memberId, { familyName: inviterFamilyName });
-    }
-    await db.updateFamily(guildId, inviterFamilyName, { members: inviterFamily.members });
-
-    // Pont relationnel logique
-    const inviter = await db.getOrCreateUser(guildId, inviterId);
-    const invited = await db.getOrCreateUser(guildId, invitedId);
-
-    if (role === 'oncle' || role === 'tante') {
-        // La cible devient le frère/soeur d'un des parents de l'inviteur
-        const parentId = inviter.father || inviter.mother;
-        if (parentId) {
-            const pData = await db.getOrCreateUser(guildId, parentId);
-            if (pData && (pData.father || pData.mother)) {
-                // On donne à l'invité les mêmes parents que le parent de l'inviteur (les grands-parents)
-                await db.updateUser(guildId, invitedId, { father: pData.father, mother: pData.mother });
-                const gps = [pData.father, pData.mother].filter(g => g !== null);
-                for (const gpId of gps) {
-                    const gpData = await db.getOrCreateUser(guildId, gpId);
-                    if (gpData && !gpData.children.includes(invitedId)) {
-                        gpData.children.push(invitedId);
-                        await db.updateUser(guildId, gpId, { children: gpData.children });
-                    }
-                }
-            }
-        }
-    } else if (role === 'frère' || role === 'soeur') {
-        // La cible partage les mêmes parents que l'inviteur
-        if (inviter.father || inviter.mother) {
-            await db.updateUser(guildId, invitedId, { father: inviter.father, mother: inviter.mother });
-            const ps = [inviter.father, inviter.mother].filter(p => p !== null);
-            for (const pId of ps) {
-                const pData = await db.getOrCreateUser(guildId, pId);
-                if (pData && !pData.children.includes(invitedId)) {
-                    pData.children.push(invitedId);
-                    await db.updateUser(guildId, pId, { children: pData.children });
-                }
-            }
-        }
-    } else if (role === 'grand-père' || role === 'grand-mère') {
-        // La cible devient le parent d'un des parents de l'inviteur
-        const parentId = inviter.father || inviter.mother;
-        if (parentId) {
-            const pData = await db.getOrCreateUser(guildId, parentId);
-            if (pData) {
-                const field = role === 'grand-père' ? 'father' : 'mother';
-                await db.updateUser(guildId, parentId, { [field]: invitedId });
-            }
-            if (invited && !invited.children.includes(parentId)) {
-                invited.children.push(parentId);
-                await db.updateUser(guildId, invitedId, { children: invited.children });
-            }
-        }
-    }
-
-    // Remove the invited family
-    await db.deleteFamily(guildId, invitedFamilyName);
-}
-
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -734,7 +642,7 @@ async function sendInvitation(guildId, interaction, author, target, role, action
             await i.message.delete().catch(() => {});
             await i.channel.send(`🎊 Félicitations ! ${target} est maintenant le/la **${role}** de ${author} !`);
         } else if (i.customId === 'i_merge') {
-            await mergeFamilies(guildId, authorData.familyName, targetData.familyName, author.id, target.id, role);
+        await db.mergeFamilies(guildId, authorData.familyName, targetData.familyName, author.id, target.id, role);
             await executeLinkChange(guildId, author.id, target.id, role, action);
             await i.message.delete().catch(() => {});
             await i.channel.send(`🤝 Les familles ont fusionné ! ${target} est maintenant le/la **${role}** de ${author} !`);

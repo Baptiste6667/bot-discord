@@ -116,6 +116,81 @@ async function getAllFamilies(guildId) {
   }, {});
 }
 
+// New function to merge two families
+async function mergeFamilies(guildId, inviterFamilyName, invitedFamilyName, inviterId, invitedId, role) {
+    const inviterFamily = await getFamily(guildId, inviterFamilyName);
+    const invitedFamily = await getFamily(guildId, invitedFamilyName);
+
+    if (!inviterFamily || !invitedFamily) {
+        console.error("Attempted to merge non-existent families.");
+        return;
+    }
+
+    // Add all members of the invited family to the inviter's family
+    for (const memberId of invitedFamily.members) {
+        if (!inviterFamily.members.includes(memberId)) {
+            inviterFamily.members.push(memberId);
+        }
+        // Update each member's familyName
+        await updateUser(guildId, memberId, { familyName: inviterFamilyName });
+    }
+    await updateFamily(guildId, inviterFamilyName, { members: inviterFamily.members });
+
+    // Pont relationnel logique
+    const inviter = await getOrCreateUser(guildId, inviterId);
+    const invited = await getOrCreateUser(guildId, invitedId);
+
+    if (role === 'oncle' || role === 'tante') {
+        // La cible devient le frère/soeur d'un des parents de l'inviteur
+        const parentId = inviter.father || inviter.mother;
+        if (parentId) {
+            const pData = await getOrCreateUser(guildId, parentId);
+            if (pData && (pData.father || pData.mother)) {
+                // On donne à l'invité les mêmes parents que le parent de l'inviteur (les grands-parents)
+                await updateUser(guildId, invitedId, { father: pData.father, mother: pData.mother });
+                const gps = [pData.father, pData.mother].filter(g => g !== null);
+                for (const gpId of gps) {
+                    const gpData = await getOrCreateUser(guildId, gpId);
+                    if (gpData && !gpData.children.includes(invitedId)) {
+                        gpData.children.push(invitedId);
+                        await updateUser(guildId, gpId, { children: gpData.children });
+                    }
+                }
+            }
+        }
+    } else if (role === 'frère' || role === 'soeur') {
+        // La cible partage les mêmes parents que l'inviteur
+        if (inviter.father || inviter.mother) {
+            await updateUser(guildId, invitedId, { father: inviter.father, mother: inviter.mother });
+            const ps = [inviter.father, inviter.mother].filter(p => p !== null);
+            for (const pId of ps) {
+                const pData = await getOrCreateUser(guildId, pId);
+                if (pData && !pData.children.includes(invitedId)) {
+                    pData.children.push(invitedId);
+                    await updateUser(guildId, pId, { children: pData.children });
+                }
+            }
+        }
+    } else if (role === 'grand-père' || role === 'grand-mère') {
+        // La cible devient le parent d'un des parents de l'inviteur
+        const parentId = inviter.father || inviter.mother;
+        if (parentId) {
+            const pData = await getOrCreateUser(guildId, parentId);
+            if (pData) {
+                const field = role === 'grand-père' ? 'father' : 'mother';
+                await updateUser(guildId, parentId, { [field]: invitedId });
+            }
+            if (invited && !invited.children.includes(parentId)) {
+                invited.children.push(parentId);
+                await updateUser(guildId, invitedId, { children: invited.children });
+            }
+        }
+    }
+
+    // Remove the invited family
+    await deleteFamily(guildId, invitedFamilyName);
+}
+
 async function clearUserFamilyLinksDB(guildId, userId) {
   const userData = await getOrCreateUser(guildId, userId);
 
