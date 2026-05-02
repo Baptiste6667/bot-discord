@@ -309,11 +309,46 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
         ctx.beginPath(); ctx.moveTo(centerX, centerY - 35); ctx.lineTo(xPos, 130 + 35); ctx.stroke();
     }
 
-    const childrenDataLines = membersToDraw;
-    for (let i = 0; i < childrenDataLines.length; i++) {
-        const spread = canvasWidth - 100;
-        const xPos = centerX + (i - (childrenDataLines.length - 1) / 2) * (childrenDataLines.length > 1 ? spread / (Math.max(1, childrenDataLines.length - 1)) : 0);
-        ctx.beginPath(); ctx.moveTo(centerX, centerY + 35); ctx.lineTo(xPos, 430 - 35); ctx.stroke();
+    // ÉTAPE : Calcul des positions des enfants selon la parenté
+    const childrenPos = [];
+    const spouseId = userData.spouse;
+
+    for (let i = 0; i < membersToDraw.length; i++) {
+        const childId = membersToDraw[i];
+        const childDb = await db.getOrCreateUser(guildId, childId);
+        
+        let targetBaseX = centerX; // Par défaut sous "Moi"
+        
+        if (spouseId) {
+            const isChildOfMe = childDb.father === userId || childDb.mother === userId;
+            const isChildOfSpouse = childDb.father === spouseId || childDb.mother === spouseId;
+
+            if (isChildOfMe && isChildOfSpouse) {
+                targetBaseX = centerX + 100; // Milieu entre les deux
+            } else if (isChildOfSpouse) {
+                targetBaseX = centerX + 200; // Sous le conjoint
+            }
+        }
+
+        // Spread local pour éviter les superpositions si plusieurs enfants ont le même parentage
+        const sameParentage = membersToDraw.filter((_, idx) => {
+            // Logique simplifiée pour le spread : on décale légèrement si plusieurs enfants arrivent au même endroit
+            return idx < i; 
+        }).length;
+        
+        const xPos = targetBaseX + (sameParentage * 20) - (membersToDraw.length > 5 ? 50 : 0);
+        childrenPos.push(xPos);
+
+        // Dessin de la ligne vers l'enfant
+        let lineStartX = centerX;
+        if (spouseId && (childDb.father === spouseId || childDb.mother === spouseId)) {
+            lineStartX = (childDb.father === userId || childDb.mother === userId) ? centerX + 100 : centerX + 200;
+        }
+
+        ctx.beginPath(); 
+        ctx.moveTo(lineStartX, centerY + 35); 
+        ctx.lineTo(xPos, 430 - 35); 
+        ctx.stroke();
     }
     ctx.restore();
 
@@ -324,10 +359,8 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
         const xPos = centerX - 130 + (i * 260);
         await drawNode(parents[i], xPos, 130, parents[i] === userData.father ? "Père" : "Mère");
     }
-    for (let i = 0; i < childrenDataLines.length; i++) {
-        const spread = canvasWidth - 100;
-        const xPos = centerX + (i - (childrenDataLines.length - 1) / 2) * (childrenDataLines.length > 1 ? spread / Math.max(1, childrenDataLines.length - 1) : 0);
-        await drawNode(childrenDataLines[i], xPos, 430, isGlobal ? "Branche" : "Enfant");
+    for (let i = 0; i < membersToDraw.length; i++) {
+        await drawNode(membersToDraw[i], childrenPos[i], 430, isGlobal ? "Branche" : "Enfant");
     }
     
     await drawNode(userId, centerX, centerY, "Moi", '#5865F2');
@@ -409,8 +442,8 @@ async function propagateNameChange(guildId, userId, oldName, newName) { // No lo
     for (const childId of (user.children || [])) {
         const child = await db.getOrCreateUser(guildId, childId);
         if (child && child.familyName === oldName) {
-            // Logique : On ne change le nom que si l'enfant n'est pas marié et n'a pas lui-même d'enfants
-            if (!child.spouse && (child.children || []).length === 0) {
+            // Changement de nom uniquement si l'enfant n'est pas marié
+            if (!child.spouse) {
                 await db.updateUser(guildId, childId, { familyName: newName });
                 // Mise à jour du registre de famille
                 const newFamily = await db.getFamily(guildId, newName);
@@ -500,12 +533,7 @@ async function executeLinkChange(guildId, id1, id2, role, action) { // No longer
         const combinedChildren = [...new Set([...d1Update.children, ...d2Update.children])];
         d1Update.children = combinedChildren;
         d2Update.children = combinedChildren;
-
-        const role1 = d1.gender === 'féminin' ? 'mother' : 'father';
-        const role2 = d2.gender === 'féminin' ? 'mother' : 'father';
-        for (const childId of combinedChildren) {
-            await db.updateUser(guildId, childId, { [role1]: id1, [role2]: id2 });
-        }
+        // Note: On ne définit plus automatiquement le nouveau conjoint comme parent des enfants pré-existants
     } else if (role === 'couple') {
         d1Update.couple = id2; d2Update.couple = id1;
     } else if (role === 'père' || role === 'mère') {
