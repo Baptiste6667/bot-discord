@@ -1224,7 +1224,7 @@ client.on('messageCreate', async (message) => {
                         .setTitle('🎊 Un Mariage Céleste !')
                         .setColor('#FF69B4')
                         .setDescription(congratulationsText)
-                        .setImage(GIF_LIBRARY.marry_accept)
+                        .setImage(getGif('marry_accept'))
                         .setFooter({ text: 'Vive les mariés !' })
                         .setTimestamp();
 
@@ -1237,7 +1237,7 @@ client.on('messageCreate', async (message) => {
                         .setTitle('💔 Un Coeur Brisé...')
                         .setColor('#95a5a6')
                         .setDescription(`L'amour n'est pas au rendez-vous aujourd'hui... ${formatMention(target.id)} a poliment décliné la proposition de ${formatMention(authorId)}.`)
-                        .setImage(GIF_LIBRARY.marry_decline)
+                        .setImage(getGif('marry_decline'))
                         .setFooter({ text: 'Peut-être une prochaine fois ?' });
 
                     await i.followUp({ embeds: [declineEmbed] });
