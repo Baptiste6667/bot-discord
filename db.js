@@ -177,6 +177,7 @@ module.exports = {
   updateFamily,
   deleteFamily,
   getAllFamilies,
+  mergeFamilies,
   clearUserFamilyLinksDB,
   resetDatabase,
   addFamilyLog

@@ -816,29 +816,29 @@ client.on('messageCreate', async (message) => {
                 });
 
                 coll.on('collect', async (i) => {
-                    await i.deferUpdate(); // Acknowledge the interaction
-
                     if (i.customId === 'admin_cancel') return i.message.delete().catch(() => {});
+
+                    if (i.customId === 'admin_history') {
+                        const historyEmbed = new EmbedBuilder()
+                            .setTitle(`📜 Histoire des ${family.familyName.toUpperCase()}`)
+                            .setColor('#f1c40f')
+                            .setDescription(family.history.map(h => `• [${new Date(h.date).toLocaleDateString('fr-FR')}] ${h.action}`).reverse().join('\n') || "Aucun événement enregistré.")
+                            .setTimestamp();
+                        return i.reply({ embeds: [historyEmbed], flags: MessageFlags.Ephemeral });
+                    }
+
+                    if (i.customId === 'admin_rename') {
+                        const modal = new ModalBuilder().setCustomId('admin_modal_rename').setTitle('Renommer (Admin)');
+                        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('new_name').setLabel("Nouveau nom").setStyle(TextInputStyle.Short).setRequired(true)));
+                        return i.showModal(modal);
+                    }
+
                     if (i.customId === 'admin_clear') {
+                        await i.deferUpdate();
                     for (const mId of family.members) await db.updateUser(guildId, mId, { familyName: null, spouse: null, children: [], mother: null, father: null });
                     await db.deleteFamily(guildId, familyName);
                     await i.message.delete();
                     return i.channel.send({ embeds: [successEmbed(`Famille **${familyName.toUpperCase()}** supprimée.`)] });
-                }
-                
-                if (i.customId === 'admin_rename') {
-                    const modal = new ModalBuilder().setCustomId('admin_modal_rename').setTitle('Renommer (Admin)');
-                    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('new_name').setLabel("Nouveau nom").setStyle(TextInputStyle.Short).setRequired(true)));
-                    return i.showModal(modal);
-                }
-
-                if (i.customId === 'admin_history') {
-                    const historyEmbed = new EmbedBuilder()
-                        .setTitle(`📜 Histoire des ${family.familyName.toUpperCase()}`)
-                        .setColor('#f1c40f')
-                        .setDescription(family.history.map(h => `• [${new Date(h.date).toLocaleDateString('fr-FR')}] ${h.action}`).reverse().join('\n') || "Aucun événement enregistré.")
-                        .setTimestamp();
-                    return i.followUp({ embeds: [historyEmbed], flags: MessageFlags.Ephemeral });
                 }
 
                 const action = i.customId.replace('admin_', ''); // Extract action from customId
@@ -859,7 +859,7 @@ client.on('messageCreate', async (message) => {
                     }));
                     targetSelectRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('target').setPlaceholder(`Choisir le membre à ${action === 'remove' ? 'retirer' : 'modifier'}...`).addOptions(memberOptions));
                 }
-                await i.update({ content: `Action: **${action}**. Sélectionnez le membre.`, components: [targetSelectRow] });
+                await i.update({ content: `Action: **${action}**. Sélectionnez le membre.`, components: [targetSelectRow], embeds: [] });
 
                 try {
                     const ui = await msg.awaitMessageComponent({ 
@@ -1025,7 +1025,6 @@ client.on('messageCreate', async (message) => {
                 
                 collector.on('collect', async (i) => {
                     if (i.customId === 'cancel_main') { // Gérer le bouton d'annulation principal
-                        await i.deferUpdate();
                         return msg.delete().catch(() => {});
                     }
 
@@ -1058,11 +1057,26 @@ client.on('messageCreate', async (message) => {
 
                 // Gérer les interactions des boutons d'action de la famille
                 if (i.customId.startsWith('fam_')) {
-                    await i.deferUpdate(); // Acknowledge the interaction
                     const action = i.customId.replace('fam_', ''); // Extract action from customId
 
                     if (action === 'cancel') { // Bouton "Annuler" ou "Fermer"
                         return msg.delete().catch(() => {});
+                    }
+
+                    if (action === 'history') {
+                        const family = await db.getFamily(guildId, authorData.familyName);
+                        const historyEmbed = new EmbedBuilder()
+                            .setTitle(`📜 Histoire des ${family.familyName.toUpperCase()}`)
+                            .setColor('#f1c40f')
+                            .setDescription(family.history.map(h => `• [${new Date(h.date).toLocaleDateString('fr-FR')}] ${h.action}`).reverse().join('\n') || "Aucun événement enregistré.")
+                            .setTimestamp();
+                        return i.reply({ embeds: [historyEmbed], flags: MessageFlags.Ephemeral });
+                    }
+
+                    if (action === 'rename') {
+                        const modal = new ModalBuilder().setCustomId('modal_rename_branch').setTitle('Renommer la Lignée');
+                        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('new_name').setLabel("Nouveau nom").setStyle(TextInputStyle.Short).setRequired(true)));
+                        return i.showModal(modal);
                     }
 
                     if (action === 'delete') {
@@ -1073,6 +1087,7 @@ client.on('messageCreate', async (message) => {
                     }
                     
                     if (action === 'leave') {
+                        await i.deferUpdate();
                         await clearUserFamilyLinks(guildId, authorId);
                         await msg.delete().catch(() => {});
                         return i.channel.send(`👋 ${message.author} a quitté sa famille.`);
@@ -1095,7 +1110,7 @@ client.on('messageCreate', async (message) => {
                         }));
                         targetSelectRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('u').setPlaceholder('Choisir le membre de la famille...').addOptions(memberOpts));
                     }
-                    await i.update({ content: `Action : **${action}**.`, components: [targetSelectRow] });
+                    await i.update({ content: `Action : **${action}**.`, components: [targetSelectRow], embeds: [] });
 
                     try {
                         const ui = await i.message.awaitMessageComponent({ 
@@ -1204,11 +1219,11 @@ client.on('messageCreate', async (message) => {
                 .setThumbnail(client.user.displayAvatarURL())
                 .setDescription(`Gérez vos lignées et votre fortune via nos dashboards interactifs !\nPréfixe : \`${PREFIX}\``)
                 .addFields(
-                    { name: '🏠 Famille', value: `\`${PREFIX}family\` : Dashboard personnel.\n\`${PREFIX}family <Nom/ID> [global]\` : Arbre visuel.\n\`${PREFIX}listfamilies\` : Liste toutes les familles du serveur.` },
+                    { name: '🏠 Famille', value: `\`${PREFIX}family\` : Dashboard personnel.\n\`${PREFIX}family <Nom/ID> [global]\` : Arbre visuel.\n\`${PREFIX}fh [Nom]\` : Historique de la lignée.\n\`${PREFIX}listfamilies\` : Liste des familles.` },
                     { name: 'ℹ️ Profil', value: `\`${PREFIX}info [@User]\` : Fiche d'identité et personnalisation.` },
                     { name: '💰 Économie', value: `\`${PREFIX}account\` : Fortune du foyer et classement des richesses.` },
                     { name: '💍 Relations & Social', value: `\`${PREFIX}ask <@User>\` : Se mettre en couple.\n\`${PREFIX}end\` : Rompre la relation.\n\`${PREFIX}marry <@User>\` : Mariage.\n\`${PREFIX}love-calc <@U1> [@U2]\` : Test de compatibilité.\n\`${PREFIX}divorce\`, \`${PREFIX}hug\`, \`${PREFIX}kiss\`, \`${PREFIX}pat\`, \`${PREFIX}slap\`, \`${PREFIX}tickle\`, \`${PREFIX}dance\`, \`${PREFIX}cuddle\`, \`${PREFIX}bite\`, \`${PREFIX}highfive\`, \`${PREFIX}handhold\`` },
-                    { name: '⚙️ Administration', value: `\`${PREFIX}adminfamily <Nom>\` : Outils de gestion forcée.\n\`${PREFIX}fh <Nom>\` : Historique d'une famille.\n\`${PREFIX}resetdb\` : Réinitialisation complète des données du serveur (Admin uniquement).` }
+                    { name: '⚙️ Administration', value: `\`${PREFIX}adminfamily <Nom>\` : Gestion forcée (Rename, Transfert, Historique).\n\`${PREFIX}resetdb\` : Réinitialisation complète (Admin uniquement).` }
                 );
             return message.channel.send({ embeds: [h] }); // La réponse reste
         }
@@ -1433,9 +1448,6 @@ client.on('messageCreate', async (message) => {
                         return msg.delete();
                     }
 
-                    const authorHasFamily = !!currentAuthorData.familyName;
-                    const targetHasFamily = !!currentTargetData.familyName;
-
                     const choiceEmbed = new EmbedBuilder()
                         .setTitle("💍 Choix de Lignée")
                         .setColor("#FF69B4")
@@ -1457,14 +1469,14 @@ client.on('messageCreate', async (message) => {
                     choiceColl.on('collect', async (ui) => {
                         await ui.deferUpdate();
                         let selectedName = ui.customId === 'name_a' ? nameA : (ui.customId === 'name_b' ? nameB : mixed);
-                        if (!selectedName.endsWith('-famille')) selectedName += '-famille';
+                        if (!selectedName.toLowerCase().endsWith('-famille')) selectedName += '-famille';
 
                         // Fusion ou création basée sur le nom choisi
                         if (currentAuthorData.familyName && currentAuthorData.familyName !== selectedName) {
-                             await mergeFamilies(guildId, selectedName, currentAuthorData.familyName, authorId, target.id, 'conjoint');
+                             await db.mergeFamilies(guildId, selectedName, currentAuthorData.familyName, authorId, target.id, 'conjoint');
                         }
                         if (currentTargetData.familyName && currentTargetData.familyName !== selectedName) {
-                             await mergeFamilies(guildId, selectedName, currentTargetData.familyName, authorId, target.id, 'conjoint');
+                             await db.mergeFamilies(guildId, selectedName, currentTargetData.familyName, authorId, target.id, 'conjoint');
                         }
                         
                         if (!await db.getFamily(guildId, selectedName)) {
@@ -1488,7 +1500,6 @@ client.on('messageCreate', async (message) => {
                         await msg.delete().catch(() => {});
                         choiceColl.stop();
                     });
-
                 } else if (i.customId === 'm_decline') {
                     const declineEmbed = new EmbedBuilder()
                         .setTitle('💔 Un Coeur Brisé...')
@@ -1889,6 +1900,21 @@ client.on('interactionCreate', async (interaction) => {
         await interaction.reply({ content: "✅ Bio mise à jour !", flags: MessageFlags.Ephemeral });
     }
 
+    if (interaction.customId === 'admin_modal_rename') {
+        const newName = interaction.fields.getTextInputValue('new_name').toLowerCase().trim();
+        const oldName = interaction.message.embeds[0].title.split('Famille ')[1].toLowerCase();
+        
+        if (await db.getFamily(guildId, newName)) return interaction.reply({ content: "❌ Ce nom est déjà pris.", flags: MessageFlags.Ephemeral });
+        
+        const family = await db.getFamily(guildId, oldName);
+        await db.createFamily(guildId, newName, family.head);
+        await db.updateFamily(guildId, newName, { members: family.members, history: family.history });
+        for (const mId of family.members) await db.updateUser(guildId, mId, { familyName: newName });
+        await db.deleteFamily(guildId, oldName);
+        await db.addFamilyLog(guildId, newName, `🏷️ Famille renommée de ${oldName.toUpperCase()} à ${newName.toUpperCase()} par un administrateur.`);
+        await interaction.reply({ content: `✅ Famille renommée en **${newName.toUpperCase()}** !`, flags: MessageFlags.Ephemeral });
+    }
+
     if (interaction.customId === 'modal_rename_branch') {
         const newName = interaction.fields.getTextInputValue('new_name').toLowerCase().trim();
         if (await db.getFamily(guildId, newName)) return interaction.reply({ content: "❌ Nom déjà pris.", flags: MessageFlags.Ephemeral });
@@ -1901,11 +1927,13 @@ client.on('interactionCreate', async (interaction) => {
             await db.updateFamily(guildId, newName, { members: family.members });
             for (const mId of family.members) await db.updateUser(guildId, mId, { familyName: newName });
             await db.deleteFamily(guildId, oldName);
+            await db.addFamilyLog(guildId, newName, `🏷️ Dynastie renommée de ${oldName.toUpperCase()} à ${newName.toUpperCase()} par <@${interaction.user.id}>.`);
             await interaction.reply({ content: `✅ Dynastie renommée : **${newName.toUpperCase()}** !` });
         } else {
             if (oldName && family) await db.updateFamily(guildId, oldName, { members: family.members.filter(id => id !== interaction.user.id) });
             await db.createFamily(guildId, newName, interaction.user.id);
             await db.updateUser(guildId, interaction.user.id, { familyName: newName });
+            await db.addFamilyLog(guildId, newName, `🏷️ Nouvelle branche fondée : ${newName.toUpperCase()} (issue de ${oldName.toUpperCase()}).`);
             await propagateNameChange(guildId, interaction.user.id, oldName, newName);
             await interaction.reply({ content: `✅ Branche **${newName.toUpperCase()}** fondée !` });
         }
