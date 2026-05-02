@@ -144,7 +144,7 @@ async function sendFamilyDisplay(ctx, guildId, targetId, isGlobal = false) {
     if (!family) return;
 
     const [buffer, ext, membersWealth] = await Promise.all([
-        generateFamilyImage(client, guildId, targetId),
+        generateFamilyImage(client, guildId, targetId, isGlobal),
         getExtendedFamily(guildId, targetId),
         Promise.all(family.members.map(id => getUBUser(guildId, id)))
     ]);
@@ -177,7 +177,7 @@ async function sendFamilyDisplay(ctx, guildId, targetId, isGlobal = false) {
 }
 
 // --- Visual Tree Generator ---
-async function generateFamilyImage(client, guildId, userId) {
+async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
     console.log(`[DEBUG] Début génération image pour : ${userId}`);
     const userData = await db.getOrCreateUser(guildId, userId); // Fetch user data from DB
     const family = userData.familyName ? await db.getFamily(guildId, userData.familyName) : null;
@@ -220,11 +220,13 @@ async function generateFamilyImage(client, guildId, userId) {
         console.log(`[DEBUG] Dessin du nœud ${id} (${roleText}) à x:${x}, y:${y}`);
         
         const user = client.users.cache.get(id) || (typeof id === 'string' ? await client.users.fetch(id).catch(() => null) : null);
+        const dbUser = await db.getOrCreateUser(guildId, id);
         const name = (user ? user.username : id)?.toString() || "Inconnu";
         const isHead = family?.head === id;
+        const famName = dbUser.familyName ? dbUser.familyName.split('-famille')[0].toUpperCase() : "SANS NOM";
 
         // Dessin du rectangle
-        fillRoundedRect(x - 90, y - 35, 180, 70, 15, isHead ? '#faa61a' : color);
+        fillRoundedRect(x - 95, y - 45, 190, 90, 15, isHead ? '#faa61a' : color);
 
         if (user) {
             // Charger l'avatar
@@ -244,13 +246,18 @@ async function generateFamilyImage(client, guildId, userId) {
                 ctx.save(); // Sauvegarder l'état pour le texte
                 ctx.fillStyle = '#ffffff';
                 ctx.textAlign = 'left';
-                ctx.font = '16px "MyCustomFont", sans-serif'; // Utiliser l'alias et un fallback générique
-                ctx.fillText(String(name).substring(0, 12), x - 15, y - 5);
+                ctx.font = 'bold 16px "MyCustomFont", sans-serif';
+                ctx.fillText(String(name).substring(0, 12), x - 15, y - 10);
                 
                 // Dessin du rôle
                 ctx.font = '13px "MyCustomFont", sans-serif';
                 ctx.fillStyle = '#ffffff';
-                ctx.fillText(String((isHead ? "👑 " : "") + roleText), x - 15, y + 15);
+                ctx.fillText(String((isHead ? "👑 " : "") + roleText), x - 15, y + 10);
+
+                // Dessin du nom de famille spécifique au membre
+                ctx.font = 'italic 11px sans-serif';
+                ctx.fillStyle = '#b9bbbe';
+                ctx.fillText(famName, x - 15, y + 25);
                 ctx.restore(); // Restaurer l'état après le texte
             } catch (err) {
                 console.error(`[DEBUG] Erreur chargement avatar/texte pour ${user.username}:`, err.message);
@@ -279,7 +286,7 @@ async function generateFamilyImage(client, guildId, userId) {
         ctx.fillStyle = '#ffffff';
         ctx.font = '26px "MyCustomFont", sans-serif'; // Utiliser l'alias et un fallback générique
         ctx.textAlign = 'center';
-        ctx.fillText(String(`Lignée des ${family.familyName.toUpperCase()}`), centerX, 45);
+        ctx.fillText(String(isGlobal ? `GÉNÉALOGIE COMPLÈTE : ${family.familyName.toUpperCase()}` : `BRANCHE : ${family.familyName.toUpperCase()}`), centerX, 45);
         ctx.restore();
     }
 
@@ -1657,6 +1664,7 @@ client.on('messageCreate', async (message) => {
             collector.on('collect', async (i) => {
                 if (i.customId === 'confirm_divorce') {
                     const family = await db.getFamily(guildId, authorData.familyName);
+                    const currentFamName = authorData.familyName;
                     if (family) {
                         // Logique de défusion : On cherche les membres qui avaient une famille d'origine différente
                         const members = await db.getUsersByIds(guildId, family.members);
@@ -1677,11 +1685,22 @@ client.on('messageCreate', async (message) => {
                                 await db.updateUser(guildId, mid, { familyName: oldName, previousFamily: null });
                                 family.members = family.members.filter(id => id !== mid);
                             }
+                            await db.addFamilyLog(guildId, oldName, `💔 La famille a été restaurée suite au divorce de <@${authorId}> et <@${targetId}>.`);
                         }
-                        await db.updateFamily(guildId, family.familyName, { members: family.members });
+
+                        if (family.members.length === 0) {
+                            await db.deleteFamily(guildId, currentFamName);
+                        } else {
+                            await db.updateFamily(guildId, currentFamName, { members: family.members });
+                            await db.addFamilyLog(guildId, currentFamName, `💔 Défusion partielle suite au divorce de <@${authorId}> et <@${targetId}>.`);
+                        }
+                    } else {
+                        // Cas d'un divorce sans dynastie (simple couple)
                     }
 
                     await executeLinkChange(guildId, authorId, targetId, null, 'remove');
+                    if (currentFamName) await db.addFamilyLog(guildId, currentFamName, `💔 <@${authorId}> a divorcé de ${formatMention(targetId)}.`);
+
                     await i.update({ embeds: [successEmbed(`💔 ${formatMention(authorId)} a divorcé de ${formatMention(targetId)} !`)], components: [] });
                 } else {
                     await i.update({ embeds: [errorEmbed("Divorce annulé.")], components: [] });

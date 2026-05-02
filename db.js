@@ -131,8 +131,8 @@ async function mergeFamilies(guildId, inviterFamilyName, invitedFamilyName, invi
         if (!inviterFamily.members.includes(memberId)) {
             inviterFamily.members.push(memberId);
         }
-        // Update each member's familyName
-        await updateUser(guildId, memberId, { familyName: inviterFamilyName });
+        // On stocke la famille d'origine pour permettre la défusion au divorce
+        await updateUser(guildId, memberId, { familyName: inviterFamilyName, previousFamily: invitedFamilyName });
     }
     await updateFamily(guildId, inviterFamilyName, { members: inviterFamily.members });
 
