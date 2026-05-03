@@ -161,9 +161,9 @@ async function sendFamilyDisplay(ctx, guildId, targetId, isGlobal = false) {
     const family = await db.getFamily(guildId, targetData.familyName);
     if (!family) return;
 
-    const ext = await getExtendedFamily(guildId, targetId);
     const [buffer, ext, membersWealth] = await Promise.all([
-        generateFamilyImage(client, guildId, targetId, isGlobal, ext),
+        generateFamilyImage(client, guildId, targetId, isGlobal),
+        getExtendedFamily(guildId, targetId),
         Promise.all((family.members || []).map(id => getUBUser(guildId, id)))
     ]);
 
@@ -425,7 +425,7 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
 
     // Dessin des Oncles et Tantes (Vue Globale)
     for (let i = 0; i < unclesAunts.length; i++) {
-        const xPos = centerX + (i % 2 === 0 ? -450 : 450);
+        const xPos = centerX + (i % 2 === 0 ? -450 - (Math.floor(i/2)*20) : 450 + (Math.floor(i/2)*20));
         const uaDb = await db.getOrCreateUser(guildId, unclesAunts[i]);
         const uaLabel = uaDb.gender === 'féminin' ? 'Tante' : (uaDb.gender === 'masculin' ? 'Oncle' : 'Oncle/Tante');
         await drawNode(unclesAunts[i], xPos, parentY, uaLabel, '#9b59b6');
@@ -434,7 +434,8 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
     if (hasGrandparents) {
         for (const gp of grandparentsData) {
             const parentIdx = parentsToDraw.indexOf(gp.childId);
-            const parentX = centerX - 130 + (parentIdx * 260);
+            if (parentIdx === -1) continue;
+            const parentX = centerX - 100 + (parentIdx * 200);
             const gpX = parentX + (gp.side === 'père' ? -60 : 60);
             
             const gpDb = await db.getOrCreateUser(guildId, gp.id);
