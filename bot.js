@@ -568,10 +568,18 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
             if (drawnGPsNodes.has(gp.id)) continue;
             drawnGPsNodes.add(gp.id);
 
-            let gpX;
-            if (parentIdx !== -1) {
-                const parentX = centerX - 100 + (parentIdx * 200);
-                gpX = parentX + (gp.side === 'père' ? -60 : (gp.side === 'mère' ? 60 : 0));
+            let gpX, parentX;
+            if (gp.childId) { // Si le grand-parent a un enfant (parent de l'utilisateur/conjoint)
+                if (inviterParents.includes(gp.childId)) {
+                    const pIdx = inviterParents.indexOf(gp.childId);
+                    parentX = centerX + (pIdx === 0 ? -110 : 110);
+                } else if (spouseParents.includes(gp.childId)) {
+                    const pIdx = spouseParents.indexOf(gp.childId);
+                    parentX = spouseX + (pIdx === 0 ? -110 : 110);
+                } else {
+                    parentX = centerX;
+                }
+                gpX = parentX + (gp.side === 'père' ? -60 : 60);
             } else {
                 gpX = centerX + (grandparentsData.indexOf(gp) % 2 === 0 ? -150 : 150);
             }
