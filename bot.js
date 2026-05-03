@@ -201,7 +201,8 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
     const family = userData.familyName ? await db.getFamily(guildId, userData.familyName) : null;
     const ext = extData || await getExtendedFamily(guildId, userId);
 
-    // On ne filtre plus par appartenance à la famille DB pour permettre de voir les parents 
+    // Collecte de tous les IDs pertinents et de leurs données de base
+    // On ne filtre plus par appartenance à la famille DB pour permettre de voir les parents
     // qui sont restés dans leur propre branche (ex: parents du marié)
     let childrenRow = (userData.children || []);
     let inviterParents = [userData.father, userData.mother].filter(p => !!p);
@@ -209,10 +210,10 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
     let spouseData = userData.spouse ? await db.getOrCreateUser(guildId, userData.spouse) : null;
     let spouseParents = spouseData ? [spouseData.father, spouseData.mother].filter(p => !!p) : [];
 
-    let parentsToDraw = [...new Set([...inviterParents, ...spouseParents])];
+    let parentsToDraw = [...new Set([...inviterParents, ...spouseParents])]; // Tous les parents uniques
 
     let grandparentsData = [];
-    // Collecte des grands-parents pour les deux côtés
+    // 1. Collecte des grands-parents structuraux (via les parents)
     for (const pId of parentsToDraw) {
         const pData = await db.getOrCreateUser(guildId, pId);
         if (pData.father) {
@@ -223,51 +224,44 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
         }
     }
 
+    // 2. Ajout des grands-parents orphelins (liens directs ou manquants)
     for (const gpId of (ext.grandparents || [])) {
         if (!grandparentsData.find(g => g.id === gpId)) {
-            const gpDb = await db.getOrCreateUser(guildId, gpId);
-            const parentLink = parentsToDraw.find(pId => pId === gpDb.children?.find(c => parentsToDraw.includes(c)));
-            grandparentsData.push({ id: gpId, childId: parentLink || null, side: gpDb.gender === 'féminin' ? 'mère' : 'père' });
+            grandparentsData.push({ id: gpId, childId: null, side: 'générique' }); // childId null for floating
         }
     }
 
-    // 3. Préparation de la Fratrie avec recherche de parents
     const siblings = isGlobal ? Array.from(ext.siblings) : [];
     let siblingsData = [];
-    for (let i = 0; i < siblings.length; i++) {
-        const sId = siblings[i];
+    for (const sId of siblings) {
         const sDb = await db.getOrCreateUser(guildId, sId);
         const parentLink = parentsToDraw.find(pId => pId === sDb.father || pId === sDb.mother);
         siblingsData.push({ id: sId, parentId: parentLink || null });
     }
 
-    // 4. Préparation des Oncles/Tantes avec recherche de parents (Grands-parents)
     const unclesAunts = isGlobal ? Array.from(ext.unclesAunts) : [];
     let unclesAuntsData = [];
-    for (let i = 0; i < unclesAunts.length; i++) {
-        const uaId = unclesAunts[i];
+    for (const uaId of unclesAunts) {
         const uaDb = await db.getOrCreateUser(guildId, uaId);
         const gpLink = grandparentsData.find(gp => gp.id === uaDb.father || gp.id === uaDb.mother);
         unclesAuntsData.push({ id: uaId, parentId: gpLink ? gpLink.id : null, side: uaDb.gender === 'féminin' ? 'mère' : 'père' });
     }
 
-    // 5. Préparation des Cousins avec recherche de parents (Oncles/Tantes)
     const cousins = isGlobal ? Array.from(ext.cousins) : [];
     let cousinsData = [];
-    for (let i = 0; i < cousins.length; i++) {
-        const cId = cousins[i];
+    for (const cId of cousins) {
         const cDb = await db.getOrCreateUser(guildId, cId);
         const uaLink = unclesAuntsData.find(ua => ua.id === cDb.father || ua.id === cDb.mother);
         cousinsData.push({ id: cId, parentId: uaLink ? uaLink.id : null });
     }
     
-    // Calcul de largeur accrue pour loger les deux fratries/parents
+    // Calcul de largeur accrue pour loger les deux lignées (inviteur + conjoint) et les branches collatérales
     const mainRowLength = 1 + (userData.spouse ? 2 : 0) + siblingsData.length + cousinsData.length;
     const canvasWidth = Math.max(1200, Math.max(mainRowLength, childrenRow.length) * 240);
     const hasGrandparents = grandparentsData.length > 0;
     const canvasHeight = hasGrandparents ? 800 : 600;
     const centerX = canvasWidth / 2;
-    const spouseX = centerX + 300; // Plus d'espace pour le conjoint et ses parents
+    const spouseX = centerX + 300; // Position fixe pour le conjoint (à droite de l'inviteur)
 
     const offsetY = hasGrandparents ? 150 : 0;
     const grandparentY = 130;
@@ -379,11 +373,12 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
     ctx.strokeStyle = '#ffffff';
     ctx.lineWidth = 3;
 
+    // Ligne entre l'utilisateur et le conjoint
     if (userData.spouse) {
-        ctx.beginPath(); ctx.moveTo(centerX + 95, centerY); ctx.lineTo(spouseX - 95, centerY); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(centerX + 95, centerY); ctx.lineTo(spouseX - 95, centerY); ctx.stroke(); // Ligne horizontale
     }
     
-    // Lignes vers les parents de l'inviteur
+    // Lignes vers les parents de l'utilisateur principal
     inviterParents.forEach((pId, i) => {
         const xPos = centerX + (i === 0 ? -110 : 110);
         ctx.beginPath(); ctx.moveTo(centerX, centerY - 35); ctx.lineTo(xPos, parentY + 35); ctx.stroke();
@@ -395,24 +390,53 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
         ctx.beginPath(); ctx.moveTo(spouseX, centerY - 35); ctx.lineTo(xPos, parentY + 35); ctx.stroke();
     });
 
-    // Lignes vers les frères et sœurs (Vue Globale)
-    // Lignes vers la fratrie
+    // Lignes vers la fratrie (siblingsData)
     siblingsData.forEach((s, i) => {
-        let xPos = centerX + (i % 2 === 0 ? -220 * (Math.floor(i/2)+1) : 220 * (Math.floor(i/2)+1));
-        let parentX = centerX;
+        let parentX;
         if (s.parentId) {
-            const pIdx = parentsToDraw.indexOf(s.parentId);
-            if (pIdx !== -1) parentX = centerX - 100 + (pIdx * 200);
+            // Trouver la position X du parent du frère/soeur
+            if (inviterParents.includes(s.parentId)) {
+                const pIdx = inviterParents.indexOf(s.parentId);
+                parentX = centerX + (pIdx === 0 ? -110 : 110);
+            } else if (spouseParents.includes(s.parentId)) {
+                const pIdx = spouseParents.indexOf(s.parentId);
+                parentX = spouseX + (pIdx === 0 ? -110 : 110);
+            } else {
+                parentX = centerX; // Fallback si le parent n'est pas directement affiché
+            }
+        } else {
+            parentX = centerX; // Fallback si pas de parent connu
         }
-        ctx.beginPath(); ctx.moveTo(parentX, parentY + 35); ctx.lineTo(xPos, centerY - 35); ctx.stroke();
+        const xPos = centerX + (i % 2 === 0 ? -220 * (Math.floor(i/2)+1) : 220 * (Math.floor(i/2)+1)); // Position flottante
+        ctx.beginPath(); ctx.moveTo(parentX, parentY + 35); ctx.lineTo(xPos, centerY - 35); ctx.stroke(); // Ligne du parent au frère/soeur
     });
 
-    // Lignes vers les Oncles/Tantes
+    // Lignes vers les Oncles/Tantes (unclesAuntsData)
     unclesAuntsData.forEach((ua, i) => {
-        let xPos = centerX + (i % 2 === 0 ? -450 - (Math.floor(i/2)*20) : 450 + (Math.floor(i/2)*20));
+        let gpX;
         if (ua.parentId) {
-            // On pourrait calculer le point exact sous le grand-parent ici
+            // Trouver la position X du grand-parent (parent de l'oncle/tante)
+            const gp = grandparentsData.find(g => g.id === ua.parentId);
+            if (gp) {
+                let parentOfX; // Position du parent du grand-parent (c'est-à-dire le parent de l'utilisateur/conjoint)
+                if (inviterParents.includes(gp.childId)) {
+                    const pIdx = inviterParents.indexOf(gp.childId);
+                    parentOfX = centerX + (pIdx === 0 ? -110 : 110);
+                } else if (spouseParents.includes(gp.childId)) {
+                    const pIdx = spouseParents.indexOf(gp.childId);
+                    parentOfX = spouseX + (pIdx === 0 ? -110 : 110);
+                } else {
+                    parentOfX = centerX; // Fallback
+                }
+                gpX = parentOfX + (gp.side === 'père' ? -50 : 50); // Position du grand-parent
+            } else {
+                gpX = centerX; // Fallback si grand-parent non trouvé
+            }
+        } else {
+            gpX = centerX; // Fallback si pas de grand-parent connu
         }
+        const xPos = centerX + (i % 2 === 0 ? -450 - (Math.floor(i/2)*20) : 450 + (Math.floor(i/2)*20)); // Position flottante
+        ctx.beginPath(); ctx.moveTo(gpX, grandparentY + 35); ctx.lineTo(xPos, parentY - 35); ctx.stroke(); // Ligne du grand-parent à l'oncle/tante
     });
 
     if (hasGrandparents) {
@@ -471,13 +495,12 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
     ctx.restore();
 
     // ÉTAPE 2 : Dessiner tous les nœuds par-dessus
-    console.log("[DEBUG] Dessin des membres...");
-    if (userData.spouse) await drawNode(userData.spouse, centerX + 200, centerY, "Conjoint(e)");
+    if (userData.spouse) await drawNode(userData.spouse, spouseX, centerY, "Conjoint(e)");
     
-    // Dessin des parents
-    for (let i = 0; i < parentsToDraw.length; i++) {
-        const xPos = centerX - 100 + (i * 200);
-        const pData = await db.getOrCreateUser(guildId, parentsToDraw[i]);
+    // Dessin des parents de l'utilisateur principal
+    for (let i = 0; i < inviterParents.length; i++) {
+        const xPos = centerX + (i === 0 ? -110 : 110);
+        const pData = await db.getOrCreateUser(guildId, inviterParents[i]);
         const pLabel = pData.gender === 'féminin' ? 'Mère' : (pData.gender === 'masculin' ? 'Père' : 'Parent');
         await drawNode(parentsToDraw[i], xPos, parentY, pLabel);
     }

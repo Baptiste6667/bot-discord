@@ -128,9 +128,12 @@ async function mergeFamilies(guildId, inviterFamilyName, invitedFamilyName, invi
     }
 
     // On crée un nom de branche pour préserver l'identité (ex: Smith-Jones)
-    const subBranchName = invitedFamilyName.startsWith(inviterFamilyName) 
-        ? invitedFamilyName 
-        : `${inviterFamilyName}-${invitedFamilyName}`.toLowerCase();
+    // Si la famille invitée est déjà une sous-branche de l'inviteur, on ne change pas son nom
+    // Sinon, on crée une nouvelle sous-branche
+    let subBranchName = invitedFamilyName.toLowerCase();
+    if (!invitedFamilyName.startsWith(inviterFamilyName.toLowerCase())) {
+        subBranchName = `${inviterFamilyName}-${invitedFamilyName}`.toLowerCase();
+    }
 
     // Add all members of the invited family to the inviter's family
     for (const memberId of invitedFamily.members) {
@@ -138,19 +141,19 @@ async function mergeFamilies(guildId, inviterFamilyName, invitedFamilyName, invi
             inviterFamily.members.push(memberId);
         }
         // Les membres rejoignent la grande famille sous le nom de leur branche spécifique
-        await updateUser(guildId, memberId, { familyName: subBranchName, previousFamily: invitedFamilyName });
+        await updateUser(guildId, memberId, { familyName: subBranchName, previousFamily: invitedFamilyName.toLowerCase() });
     }
     await updateFamily(guildId, inviterFamilyName, { members: inviterFamily.members });
 
-    // Gestion des sous-branches existantes de la famille invitée
-    if (inviterFamilyName !== subBranchName) {
+    // Gestion des sous-branches existantes de la famille invitée (si elle n'est pas déjà une sous-branche)
+    if (!invitedFamilyName.startsWith(inviterFamilyName.toLowerCase())) {
         const branches = await familiesCollection.find({ 
             guildId, 
             familyName: { $regex: new RegExp(`^${invitedFamilyName}`, 'i') } 
         }).toArray();
 
         for (const branch of branches) {
-            const newBranchName = branch.familyName.replace(new RegExp(`^${invitedFamilyName}`, 'i'), subBranchName);
+            const newBranchName = branch.familyName.replace(new RegExp(`^${invitedFamilyName}`, 'i'), subBranchName); // Replace root part
             const newBranchId = `${guildId}_${newBranchName.toLowerCase()}`;
             
             await familiesCollection.deleteOne({ _id: branch._id });
