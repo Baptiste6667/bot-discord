@@ -870,7 +870,10 @@ client.on('messageCreate', async (message) => {
                 );
 
                 const msg = await message.channel.send({ embeds: [embed], components: [row1, row2] });
-                const coll = msg.createMessageComponentCollector({ time: 120000 });
+                const coll = msg.createMessageComponentCollector({ 
+                    filter: (i) => i.user.id === authorId && i.customId.startsWith('admin_'),
+                    time: 120000 
+                });
 
                 coll.on('collect', async (i) => {
                     if (i.user.id !== authorId) return i.reply({ content: "❌ Seul l'administrateur ayant invoqué la commande peut interagir.", flags: MessageFlags.Ephemeral });
@@ -1115,7 +1118,10 @@ client.on('messageCreate', async (message) => {
                 }
 
                 const msg = await message.channel.send({ embeds: [embed], components: rows });
-                const collector = msg.createMessageComponentCollector({ time: 120000 });
+                const collector = msg.createMessageComponentCollector({ 
+                    filter: (i) => i.user.id === authorId && (i.customId.startsWith('fam_') || i.customId.startsWith('view_') || ['create_fam', 'confirm_del', 'cancel_main', 'leave_alone', 'leave_branch'].includes(i.customId)),
+                    time: 120000 
+                });
                 
                 collector.on('collect', async (i) => {
                     if (i.user.id !== authorId) return i.reply({ content: "❌ Seul l'auteur de la commande peut interagir avec ce menu.", flags: MessageFlags.Ephemeral });
