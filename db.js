@@ -50,8 +50,16 @@ async function getOrCreateUser(guildId, userId) {
   let user = await usersCollection.findOne({ _id: compositeId });
   
   if (!user) {
-    user = { _id: compositeId, guildId, userId, ...defaults };
-    await usersCollection.insertOne(user);
+    try {
+      user = { _id: compositeId, guildId, userId, ...defaults };
+      await usersCollection.insertOne(user);
+    } catch (e) {
+      // En cas de conflit (double création simultanée), on récupère l'existant
+      if (e.code === 11000) {
+        user = await usersCollection.findOne({ _id: compositeId });
+        user = { ...defaults, ...user };
+      } else throw e;
+    }
   } else {
     // Si l'utilisateur existe, on fusionne ses données avec les valeurs par défaut pour s'assurer que tous les champs sont présents
     user = { ...defaults, ...user };
