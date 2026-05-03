@@ -408,10 +408,8 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
     ctx.restore();
 
     // ÉTAPE 2 : Dessiner tous les nœuds par-dessus
-    console.log("[DEBUG] Dessin des membres...");
     if (userData.spouse) await drawNode(userData.spouse, centerX + 200, centerY, "Conjoint(e)");
     
-    // Dessin des parents
     for (let i = 0; i < parentsToDraw.length; i++) {
         const xPos = centerX - 100 + (i * 200);
         const pData = await db.getOrCreateUser(guildId, parentsToDraw[i]);
@@ -419,18 +417,24 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
         await drawNode(parentsToDraw[i], xPos, parentY, pLabel);
     }
 
-    // Dessin des frères et sœurs (Vue Globale)
     for (let i = 0; i < siblings.length; i++) {
         const xPos = centerX + (i % 2 === 0 ? -220 * (Math.floor(i/2)+1) : 220 * (Math.floor(i/2)+1));
         await drawNode(siblings[i], xPos, centerY, "Frère/Soeur", '#95a5a6');
     }
 
-    // Dessin des Oncles et Tantes (Vue Globale)
     for (let i = 0; i < unclesAunts.length; i++) {
         const xPos = centerX + (i % 2 === 0 ? -450 - (Math.floor(i/2)*20) : 450 + (Math.floor(i/2)*20));
         const uaDb = await db.getOrCreateUser(guildId, unclesAunts[i]);
         const uaLabel = uaDb.gender === 'féminin' ? 'Tante' : (uaDb.gender === 'masculin' ? 'Oncle' : 'Oncle/Tante');
         await drawNode(unclesAunts[i], xPos, parentY, uaLabel, '#9b59b6');
+    }
+
+    for (let i = 0; i < cousins.length; i++) {
+        const offset = siblings.length + 1;
+        const xPos = centerX + (i % 2 === 0 ? -220 * (Math.floor(i/2)+offset) : 220 * (Math.floor(i/2)+offset));
+        const cDb = await db.getOrCreateUser(guildId, cousins[i]);
+        const cLabel = cDb.gender === 'féminin' ? 'Cousine' : (cDb.gender === 'masculin' ? 'Cousin' : 'Cousin(e)');
+        await drawNode(cousins[i], xPos, centerY, cLabel, '#1abc9c');
     }
 
     if (hasGrandparents) {
@@ -2058,7 +2062,7 @@ client.on('messageCreate', async (message) => {
                 if (i.customId.startsWith('btn_nickname_')) {
                     const tid = i.customId.split('_')[2];
                     const modal = new ModalBuilder().setCustomId(`modal_nickname_${tid}`).setTitle('Nom sur l\'arbre');
-                    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('nick_text').setLabel("Surnom (max 12 car.)").setStyle(TextInputStyle.Short).setMaxLength(12).setRequired(true)));
+                    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('nick_text').setLabel("Surnom (max 12 car.)").setStyle(TextInputStyle.Short).setMaxLength(12).setRequired(false)));
                     return i.showModal(modal);
                 }
                 if (i.customId.startsWith('btn_gender_')) {
@@ -2339,8 +2343,10 @@ client.on('interactionCreate', async (interaction) => {
         try {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
             const targetId = interaction.customId.split('_')[2] || interaction.user.id;
-            await db.updateUser(guildId, targetId, { nickname: interaction.fields.getTextInputValue('nick_text') });
-            await interaction.editReply({ content: "✅ Nom d'affichage mis à jour sur l'arbre !" });
+            const nickInput = interaction.fields.getTextInputValue('nick_text').trim();
+            await db.updateUser(guildId, targetId, { nickname: nickInput || null });
+            const responseMsg = nickInput ? "✅ Nom d'affichage mis à jour sur l'arbre !" : "✅ Nom réinitialisé (pseudo Discord par défaut utilisé).";
+            await interaction.editReply({ content: responseMsg });
         } catch (err) {
             console.error("Erreur nickname:", err);
             if (interaction.deferred) await interaction.editReply({ content: "❌ Erreur lors de la mise à jour du nom." });
