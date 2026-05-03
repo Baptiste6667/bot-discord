@@ -205,6 +205,7 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
     let parentsToDraw = [userData.father, userData.mother].filter(p => !!p && (family ? family.members.includes(p) : true));
 
     let grandparentsData = [];
+    // 1. Collecte des grands-parents structuraux (via les parents)
     for (const pId of parentsToDraw) {
         const pData = await db.getOrCreateUser(guildId, pId);
         if (pData.father && (family ? family.members.includes(pData.father) : true)) {
@@ -214,11 +215,46 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
             grandparentsData.push({ id: pData.mother, childId: pId, side: 'mère' });
         }
     }
+    // 2. Ajout des grands-parents orphelins (liens directs ou manquants)
+    for (const gpId of (ext.grandparents || [])) {
+        if (!grandparentsData.find(g => g.id === gpId)) {
+            const gpDb = await db.getOrCreateUser(guildId, gpId);
+            const parentLink = parentsToDraw.find(pId => pId === gpDb.children?.find(c => parentsToDraw.includes(c)));
+            grandparentsData.push({ id: gpId, childId: parentLink || null, side: gpDb.gender === 'féminin' ? 'mère' : 'père' });
+        }
+    }
 
+    // 3. Préparation de la Fratrie avec recherche de parents
     const siblings = isGlobal ? Array.from(ext.siblings) : [];
+    let siblingsData = [];
+    for (let i = 0; i < siblings.length; i++) {
+        const sId = siblings[i];
+        const sDb = await db.getOrCreateUser(guildId, sId);
+        const parentLink = parentsToDraw.find(pId => pId === sDb.father || pId === sDb.mother);
+        siblingsData.push({ id: sId, parentId: parentLink || null });
+    }
+
+    // 4. Préparation des Oncles/Tantes avec recherche de parents (Grands-parents)
     const unclesAunts = isGlobal ? Array.from(ext.unclesAunts) : [];
+    let unclesAuntsData = [];
+    for (let i = 0; i < unclesAunts.length; i++) {
+        const uaId = unclesAunts[i];
+        const uaDb = await db.getOrCreateUser(guildId, uaId);
+        const gpLink = grandparentsData.find(gp => gp.id === uaDb.father || gp.id === uaDb.mother);
+        unclesAuntsData.push({ id: uaId, parentId: gpLink ? gpLink.id : null, side: uaDb.gender === 'féminin' ? 'mère' : 'père' });
+    }
+
+    // 5. Préparation des Cousins avec recherche de parents (Oncles/Tantes)
+    const cousins = isGlobal ? Array.from(ext.cousins) : [];
+    let cousinsData = [];
+    for (let i = 0; i < cousins.length; i++) {
+        const cId = cousins[i];
+        const cDb = await db.getOrCreateUser(guildId, cId);
+        const uaLink = unclesAuntsData.find(ua => ua.id === cDb.father || ua.id === cDb.mother);
+        cousinsData.push({ id: cId, parentId: uaLink ? uaLink.id : null });
+    }
     
-    const mainRowLength = 1 + (userData.spouse ? 1 : 0) + siblings.length;
+    const mainRowLength = 1 + (userData.spouse ? 1 : 0) + siblingsData.length + cousinsData.length;
     const canvasWidth = Math.max(1000, Math.max(mainRowLength, childrenRow.length) * 220);
     const hasGrandparents = grandparentsData.length > 0;
     const canvasHeight = hasGrandparents ? 700 : 550;
@@ -345,22 +381,34 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
     });
 
     // Lignes vers les frères et sœurs (Vue Globale)
-    siblings.forEach((sId, i) => {
-        const xPos = centerX + (i % 2 === 0 ? -220 * (Math.floor(i/2)+1) : 220 * (Math.floor(i/2)+1));
-        ctx.beginPath(); ctx.moveTo(centerX, centerY); ctx.lineTo(xPos + (i % 2 === 0 ? 95 : -95), centerY); ctx.stroke();
+    // Lignes vers la fratrie
+    siblingsData.forEach((s, i) => {
+        let xPos = centerX + (i % 2 === 0 ? -220 * (Math.floor(i/2)+1) : 220 * (Math.floor(i/2)+1));
+        let parentX = centerX;
+        if (s.parentId) {
+            const pIdx = parentsToDraw.indexOf(s.parentId);
+            if (pIdx !== -1) parentX = centerX - 100 + (pIdx * 200);
+        }
+        ctx.beginPath(); ctx.moveTo(parentX, parentY + 35); ctx.lineTo(xPos, centerY - 35); ctx.stroke();
+    });
+
+    // Lignes vers les Oncles/Tantes
+    unclesAuntsData.forEach((ua, i) => {
+        let xPos = centerX + (i % 2 === 0 ? -450 - (Math.floor(i/2)*20) : 450 + (Math.floor(i/2)*20));
+        if (ua.parentId) {
+            // On pourrait calculer le point exact sous le grand-parent ici
+        }
     });
 
     if (hasGrandparents) {
         for (const gp of grandparentsData) {
             const parentIdx = parentsToDraw.indexOf(gp.childId);
-            if (parentIdx === -1) continue;
-            const parentX = centerX - 100 + (parentIdx * 200);
-            const gpX = parentX + (gp.side === 'père' ? -60 : 60);
-            
-            ctx.beginPath();
-            ctx.moveTo(parentX, parentY - 35);
-            ctx.lineTo(gpX, grandparentY + 35);
-            ctx.stroke();
+            let parentX;
+            if (parentIdx !== -1) {
+                parentX = centerX - 100 + (parentIdx * 200);
+            } else {
+                parentX = centerX;
+            }
         }
     }
 
@@ -408,8 +456,10 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
     ctx.restore();
 
     // ÉTAPE 2 : Dessiner tous les nœuds par-dessus
+    console.log("[DEBUG] Dessin des membres...");
     if (userData.spouse) await drawNode(userData.spouse, centerX + 200, centerY, "Conjoint(e)");
     
+    // Dessin des parents
     for (let i = 0; i < parentsToDraw.length; i++) {
         const xPos = centerX - 100 + (i * 200);
         const pData = await db.getOrCreateUser(guildId, parentsToDraw[i]);
@@ -417,32 +467,48 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
         await drawNode(parentsToDraw[i], xPos, parentY, pLabel);
     }
 
-    for (let i = 0; i < siblings.length; i++) {
+    // Dessin de la Fratrie (Vue Globale)
+    for (let i = 0; i < siblingsData.length; i++) {
+        const s = siblingsData[i];
         const xPos = centerX + (i % 2 === 0 ? -220 * (Math.floor(i/2)+1) : 220 * (Math.floor(i/2)+1));
-        await drawNode(siblings[i], xPos, centerY, "Frère/Soeur", '#95a5a6');
+        await drawNode(s.id, xPos, centerY, "Frère/Soeur", '#95a5a6');
     }
 
-    for (let i = 0; i < unclesAunts.length; i++) {
-        const xPos = centerX + (i % 2 === 0 ? -450 - (Math.floor(i/2)*20) : 450 + (Math.floor(i/2)*20));
-        const uaDb = await db.getOrCreateUser(guildId, unclesAunts[i]);
+    // Dessin des Oncles et Tantes (Vue Globale)
+    for (let i = 0; i < unclesAuntsData.length; i++) {
+        const ua = unclesAuntsData[i];
+        let xPos;
+        if (ua.parentId) {
+             // Tentative de centrage sous le GP
+             xPos = centerX + (i % 2 === 0 ? -450 : 450); 
+        } else {
+             xPos = centerX + (i % 2 === 0 ? -450 - (Math.floor(i/2)*50) : 450 + (Math.floor(i/2)*50));
+        }
+        const uaDb = await db.getOrCreateUser(guildId, ua.id);
         const uaLabel = uaDb.gender === 'féminin' ? 'Tante' : (uaDb.gender === 'masculin' ? 'Oncle' : 'Oncle/Tante');
-        await drawNode(unclesAunts[i], xPos, parentY, uaLabel, '#9b59b6');
+        await drawNode(ua.id, xPos, parentY, uaLabel, '#9b59b6');
     }
 
-    for (let i = 0; i < cousins.length; i++) {
-        const offset = siblings.length + 1;
+    // Dessin des Cousins (Vue Globale)
+    for (let i = 0; i < cousinsData.length; i++) {
+        const c = cousinsData[i];
+        const offset = siblingsData.length + 1;
         const xPos = centerX + (i % 2 === 0 ? -220 * (Math.floor(i/2)+offset) : 220 * (Math.floor(i/2)+offset));
-        const cDb = await db.getOrCreateUser(guildId, cousins[i]);
+        const cDb = await db.getOrCreateUser(guildId, c.id);
         const cLabel = cDb.gender === 'féminin' ? 'Cousine' : (cDb.gender === 'masculin' ? 'Cousin' : 'Cousin(e)');
-        await drawNode(cousins[i], xPos, centerY, cLabel, '#1abc9c');
+        await drawNode(c.id, xPos, centerY, cLabel, '#1abc9c');
     }
 
     if (hasGrandparents) {
         for (const gp of grandparentsData) {
             const parentIdx = parentsToDraw.indexOf(gp.childId);
-            if (parentIdx === -1) continue;
-            const parentX = centerX - 100 + (parentIdx * 200);
-            const gpX = parentX + (gp.side === 'père' ? -60 : 60);
+            let gpX;
+            if (parentIdx !== -1) {
+                const parentX = centerX - 100 + (parentIdx * 200);
+                gpX = parentX + (gp.side === 'père' ? -60 : (gp.side === 'mère' ? 60 : 0));
+            } else {
+                gpX = centerX + (grandparentsData.indexOf(gp) % 2 === 0 ? -150 : 150);
+            }
             
             const gpDb = await db.getOrCreateUser(guildId, gp.id);
             const gpLabel = gpDb.gender === 'féminin' ? 'Grand-mère' : (gpDb.gender === 'masculin' ? 'Grand-père' : 'Grand-parent');
@@ -2062,7 +2128,7 @@ client.on('messageCreate', async (message) => {
                 if (i.customId.startsWith('btn_nickname_')) {
                     const tid = i.customId.split('_')[2];
                     const modal = new ModalBuilder().setCustomId(`modal_nickname_${tid}`).setTitle('Nom sur l\'arbre');
-                    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('nick_text').setLabel("Surnom (max 12 car.)").setStyle(TextInputStyle.Short).setMaxLength(12).setRequired(false)));
+                    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('nick_text').setLabel("Surnom (max 12 car.)").setStyle(TextInputStyle.Short).setMaxLength(12).setRequired(true)));
                     return i.showModal(modal);
                 }
                 if (i.customId.startsWith('btn_gender_')) {
@@ -2343,10 +2409,8 @@ client.on('interactionCreate', async (interaction) => {
         try {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
             const targetId = interaction.customId.split('_')[2] || interaction.user.id;
-            const nickInput = interaction.fields.getTextInputValue('nick_text').trim();
-            await db.updateUser(guildId, targetId, { nickname: nickInput || null });
-            const responseMsg = nickInput ? "✅ Nom d'affichage mis à jour sur l'arbre !" : "✅ Nom réinitialisé (pseudo Discord par défaut utilisé).";
-            await interaction.editReply({ content: responseMsg });
+            await db.updateUser(guildId, targetId, { nickname: interaction.fields.getTextInputValue('nick_text') });
+            await interaction.editReply({ content: "✅ Nom d'affichage mis à jour sur l'arbre !" });
         } catch (err) {
             console.error("Erreur nickname:", err);
             if (interaction.deferred) await interaction.editReply({ content: "❌ Erreur lors de la mise à jour du nom." });
