@@ -201,21 +201,28 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
     const family = userData.familyName ? await db.getFamily(guildId, userData.familyName) : null;
     const ext = extData || await getExtendedFamily(guildId, userId);
 
-    let childrenRow = (userData.children || []).filter(id => family ? family.members.includes(id) : true);
-    let parentsToDraw = [userData.father, userData.mother].filter(p => !!p && (family ? family.members.includes(p) : true));
+    // On ne filtre plus par appartenance à la famille DB pour permettre de voir les parents 
+    // qui sont restés dans leur propre branche (ex: parents du marié)
+    let childrenRow = (userData.children || []);
+    let inviterParents = [userData.father, userData.mother].filter(p => !!p);
+    
+    let spouseData = userData.spouse ? await db.getOrCreateUser(guildId, userData.spouse) : null;
+    let spouseParents = spouseData ? [spouseData.father, spouseData.mother].filter(p => !!p) : [];
+
+    let parentsToDraw = [...new Set([...inviterParents, ...spouseParents])];
 
     let grandparentsData = [];
-    // 1. Collecte des grands-parents structuraux (via les parents)
+    // Collecte des grands-parents pour les deux côtés
     for (const pId of parentsToDraw) {
         const pData = await db.getOrCreateUser(guildId, pId);
-        if (pData.father && (family ? family.members.includes(pData.father) : true)) {
+        if (pData.father) {
             grandparentsData.push({ id: pData.father, childId: pId, side: 'père' });
         }
-        if (pData.mother && (family ? family.members.includes(pData.mother) : true)) {
+        if (pData.mother) {
             grandparentsData.push({ id: pData.mother, childId: pId, side: 'mère' });
         }
     }
-    // 2. Ajout des grands-parents orphelins (liens directs ou manquants)
+
     for (const gpId of (ext.grandparents || [])) {
         if (!grandparentsData.find(g => g.id === gpId)) {
             const gpDb = await db.getOrCreateUser(guildId, gpId);
@@ -254,11 +261,13 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
         cousinsData.push({ id: cId, parentId: uaLink ? uaLink.id : null });
     }
     
-    const mainRowLength = 1 + (userData.spouse ? 1 : 0) + siblingsData.length + cousinsData.length;
-    const canvasWidth = Math.max(1000, Math.max(mainRowLength, childrenRow.length) * 220);
+    // Calcul de largeur accrue pour loger les deux fratries/parents
+    const mainRowLength = 1 + (userData.spouse ? 2 : 0) + siblingsData.length + cousinsData.length;
+    const canvasWidth = Math.max(1200, Math.max(mainRowLength, childrenRow.length) * 240);
     const hasGrandparents = grandparentsData.length > 0;
     const canvasHeight = hasGrandparents ? 800 : 600;
     const centerX = canvasWidth / 2;
+    const spouseX = centerX + 300; // Plus d'espace pour le conjoint et ses parents
 
     const offsetY = hasGrandparents ? 150 : 0;
     const grandparentY = 130;
@@ -371,13 +380,19 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
     ctx.lineWidth = 3;
 
     if (userData.spouse) {
-        ctx.beginPath(); ctx.moveTo(centerX + 90, centerY); ctx.lineTo(centerX + 110, centerY); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(centerX + 95, centerY); ctx.lineTo(spouseX - 95, centerY); ctx.stroke();
     }
     
-    // Lignes vers les parents
-    parentsToDraw.forEach((pId, i) => {
-        const xPos = centerX - 100 + (i * 200);
+    // Lignes vers les parents de l'inviteur
+    inviterParents.forEach((pId, i) => {
+        const xPos = centerX + (i === 0 ? -110 : 110);
         ctx.beginPath(); ctx.moveTo(centerX, centerY - 35); ctx.lineTo(xPos, parentY + 35); ctx.stroke();
+    });
+
+    // Lignes vers les parents du conjoint
+    spouseParents.forEach((pId, i) => {
+        const xPos = spouseX + (i === 0 ? -110 : 110);
+        ctx.beginPath(); ctx.moveTo(spouseX, centerY - 35); ctx.lineTo(xPos, parentY + 35); ctx.stroke();
     });
 
     // Lignes vers les frères et sœurs (Vue Globale)
@@ -668,30 +683,27 @@ async function executeLinkChange(guildId, id1, id2, role, action) { // No longer
     const d1 = await db.getOrCreateUser(guildId, id1);
     const d2 = await db.getOrCreateUser(guildId, id2);
 
-    // Nettoyage systématique des anciens liens
-    let d1Update = { customLinks: d1.customLinks || {} };
-    let d2Update = { customLinks: d2.customLinks || {} };
+    // Préparation des objets de mise à jour avec les données existantes
+    let d1Update = { 
+        customLinks: { ...(d1.customLinks || {}) },
+        children: (d1.children || []).filter(id => id !== id2),
+        father: d1.father === id2 ? null : d1.father,
+        mother: d1.mother === id2 ? null : d1.mother,
+        spouse: d1.spouse === id2 ? null : d1.spouse,
+        couple: d1.couple === id2 ? null : d1.couple
+    };
+    let d2Update = { 
+        customLinks: { ...(d2.customLinks || {}) },
+        children: (d2.children || []).filter(id => id !== id1),
+        father: d2.father === id1 ? null : d2.father,
+        mother: d2.mother === id1 ? null : d2.mother,
+        spouse: d2.spouse === id1 ? null : d2.spouse,
+        couple: d2.couple === id1 ? null : d2.couple
+    };
 
-    if (d1.spouse === id2) { d1Update.spouse = null; d2Update.spouse = null; }
-    if (d1.couple === id2) { d1Update.couple = null; d2Update.couple = null; }
-    d1Update.children = (d1.children || []).filter(id => id !== id2);
-    if (d1.father === id2) d1Update.father = null;
-    if (d1.mother === id2) d1Update.mother = null;
-    if (d2.father === id1) d2Update.father = null;
-    if (d2.mother === id1) d2Update.mother = null;
-    d2Update.children = (d2.children || []).filter(id => id !== id1);
-
-    // Ensure customLinks exist before trying to delete
-    if (d1.customLinks && d1.customLinks[id2]) {
-        const newCustomLinks = { ...d1.customLinks };
-        delete newCustomLinks[id2];
-        d1Update.customLinks = newCustomLinks;
-    }
-    if (d2.customLinks && d2.customLinks[id1]) {
-        const newCustomLinks = { ...d2.customLinks };
-        delete newCustomLinks[id1];
-        d2Update.customLinks = newCustomLinks;
-    }
+    // Nettoyage des customLinks si présents
+    delete d1Update.customLinks[id2];
+    delete d2Update.customLinks[id1];
 
     if (action === 'remove') {
         await db.updateUser(guildId, id1, d1Update);
@@ -701,132 +713,104 @@ async function executeLinkChange(guildId, id1, id2, role, action) { // No longer
 
     const actualRole = getGenderedRole(role, d2.gender);
 
-    if (actualRole === 'conjoint' || actualRole === 'mari' || actualRole === 'femme') {
-        d1Update.spouse = id2; d2Update.spouse = id1;
+    switch (actualRole) {
+        case 'conjoint': case 'mari': case 'femme':
+            d1Update.spouse = id2; d2Update.spouse = id1;
+            const combinedChildren = [...new Set([...d1Update.children, ...d2Update.children])];
+            d1Update.children = combinedChildren;
+            d2Update.children = combinedChildren;
+            break;
+        case 'couple':
+            d1Update.couple = id2; d2Update.couple = id1;
+            break;
+        case 'père': case 'mère': case 'enfant':
+            const isParentOfD1 = actualRole === 'père' || actualRole === 'mère';
+            const pId = isParentOfD1 ? id2 : id1;
+            const cId = isParentOfD1 ? id1 : id2;
+            const pUpd = isParentOfD1 ? d2Update : d1Update;
+            const cUpd = isParentOfD1 ? d1Update : d2Update;
+            const cData = isParentOfD1 ? d1 : d2;
 
-        // Partage des enfants existants lors du mariage (famille recomposée)
-        const combinedChildren = [...new Set([...d1Update.children, ...d2Update.children])];
-        d1Update.children = combinedChildren;
-        d2Update.children = combinedChildren;
-        // Note: On ne définit plus automatiquement le nouveau conjoint comme parent des enfants pré-existants
-    } else if (role === 'couple') {
-        d1Update.couple = id2; d2Update.couple = id1;
-    } else if (actualRole === 'père' || actualRole === 'mère') {
-        // On remplit le premier slot de parent libre (father ou mother)
-        if (!d1.father || d1.father === id2) d1Update.father = id2;
-        else d1Update.mother = id2;
-        if (!d2Update.children.includes(id1)) d2Update.children.push(id1);
+            if (!cUpd.father || cUpd.father === pId) cUpd.father = pId;
+            else cUpd.mother = pId;
+            if (!pUpd.children.includes(cId)) pUpd.children.push(cId);
 
-        // Auto-liaison aux grands-parents existants de l'enfant (id1)
-        const ext = await getExtendedFamily(guildId, id1);
-        if (ext.grandparents.size > 0) {
-            const otherParentId = d1Update.father === id2 ? d1.mother : d1.father;
-            let otherParentLinked = false;
-            if (otherParentId) {
-                const opData = await db.getOrCreateUser(guildId, otherParentId);
-                otherParentLinked = Array.from(ext.grandparents).some(gpId => opData.father === gpId || opData.mother === gpId);
-            }
-
-            if (!otherParentLinked) {
-                for (const gpId of ext.grandparents) {
-                    const gpData = await db.getOrCreateUser(guildId, gpId);
-                    if (!gpData.children.includes(id2)) {
-                        await db.updateUser(guildId, gpId, { children: [...gpData.children, id2] });
-                    }
-                    // Liaison structurelle du parent aux grands-parents basée sur le rôle custom
-                    const gpRel = (d1.customLinks && d1.customLinks[gpId]) || '';
-                    if (gpRel.includes('père') && !d2.father) d2Update.father = gpId;
-                    else if (gpRel.includes('mère') && !d2.mother) d2Update.mother = gpId;
+            // Auto-liaison aux grands-parents
+            const extGP = await getExtendedFamily(guildId, cId);
+            if (extGP.grandparents.size > 0) {
+                const otherPId = cUpd.father === pId ? cData.mother : cData.father;
+                let otherPLinked = false;
+                if (otherPId) {
+                    const opD = await db.getOrCreateUser(guildId, otherPId);
+                    otherPLinked = Array.from(extGP.grandparents).some(gp => opD.father === gp || opD.mother === gp);
                 }
-            }
-        }
-    } else if (actualRole === 'enfant') {
-        if (!d1Update.children.includes(id2)) d1Update.children.push(id2);
-        // On remplit le premier slot libre chez l'enfant
-        if (!d2.father || d2.father === id1) d2Update.father = id1;
-        else d2Update.mother = id1;
-
-        // Auto-liaison du parent (id1) aux grands-parents de l'enfant (id2)
-        const ext = await getExtendedFamily(guildId, id2);
-        if (ext.grandparents.size > 0) {
-            const otherParentId = d2Update.father === id1 ? d2.mother : d2.father;
-            let otherParentLinked = false;
-            if (otherParentId) {
-                const opData = await db.getOrCreateUser(guildId, otherParentId);
-                otherParentLinked = Array.from(ext.grandparents).some(gpId => opData.father === gpId || opData.mother === gpId);
-            }
-
-            if (!otherParentLinked) {
-                for (const gpId of ext.grandparents) {
-                    const gpData = await db.getOrCreateUser(guildId, gpId);
-                    if (!gpData.children.includes(id1)) {
-                        await db.updateUser(guildId, gpId, { children: [...gpData.children, id1] });
-                    }
-                    // Liaison structurelle du parent aux grands-parents
-                    const gpRel = (d2.customLinks && d2.customLinks[gpId]) || '';
-                    if (gpRel.includes('père') && !d1.father) d1Update.father = gpId;
-                    else if (gpRel.includes('mère') && !d1.mother) d1Update.mother = gpId;
-                }
-            }
-        }
-    } else if (actualRole === 'frère' || actualRole === 'soeur') {
-        const parents = [d1.father, d1.mother].filter(p => !!p);
-        if (parents.length > 0) {
-            d2Update.father = d1.father;
-            d2Update.mother = d1.mother;
-            for (const pId of parents) {
-                const pData = await db.getOrCreateUser(guildId, pId);
-                if (!pData.children.includes(id2)) {
-                    await db.updateUser(guildId, pId, { children: [...pData.children, id2] });
-                }
-            }
-        }
-        d1Update.customLinks[id2] = actualRole;
-        d2Update.customLinks[id1] = await getReverseRole(actualRole, d1);
-    } else if (actualRole === 'grand-père' || actualRole === 'grand-mère') {
-        const parents = [d1.father, d1.mother].filter(p => !!p);
-        if (parents.length > 0) {
-            const parentId = parents[Math.floor(Math.random() * parents.length)];
-            const field = (actualRole === 'grand-père') ? 'father' : 'mother';
-            await db.updateUser(guildId, parentId, { [field]: id2 });
-            if (!(d2.children || []).includes(parentId)) d2Update.children = [...(d2.children || []), parentId];
-        }
-        d1Update.customLinks[id2] = actualRole;
-        d2Update.customLinks[id1] = await getReverseRole(actualRole, d1);
-    } else if (actualRole === 'oncle' || actualRole === 'tante') {
-        const ext = await getExtendedFamily(guildId, id1);
-        if (ext.grandparents.size > 0) {
-            for (const gpId of ext.grandparents) {
-                const gpData = await db.getOrCreateUser(guildId, gpId);
-                if (!gpData.children.includes(id2)) await db.updateUser(guildId, gpId, { children: [...gpData.children, id2] });
-                // Liaison structurelle si possible
-                const gpRel = (d1.customLinks && d1.customLinks[gpId]) || '';
-                if (gpRel.includes('père') && !d2.father) d2Update.father = gpId;
-                else if (gpRel.includes('mère') && !d2.mother) d2Update.mother = gpId;
-            }
-        } else {
-            const parents = [d1.father, d1.mother].filter(p => !!p);
-            if (parents.length > 0) {
-                const parentId = parents[Math.floor(Math.random() * parents.length)];
-                const pData = await db.getOrCreateUser(guildId, parentId);
-                if (pData.father || pData.mother) {
-                    d2Update.father = pData.father;
-                    d2Update.mother = pData.mother;
-                    const gps = [pData.father, pData.mother].filter(g => !!g);
-                    for (const gpId of gps) {
-                        const gpData = await db.getOrCreateUser(guildId, gpId);
-                        if (!gpData.children.includes(id2)) {
-                            await db.updateUser(guildId, gpId, { children: [...gpData.children, id2] });
+                if (!otherPLinked) {
+                    for (const gpId of extGP.grandparents) {
+                        const gpD = await db.getOrCreateUser(guildId, gpId);
+                        const gpRel = (cData.customLinks && cData.customLinks[gpId])?.toLowerCase() || '';
+                        if (gpRel.includes('père') && !pUpd.father) pUpd.father = gpId;
+                        else if (gpRel.includes('mère') && !pUpd.mother) pUpd.mother = gpId;
+                        if (!(gpD.children || []).includes(pId)) {
+                            await db.updateUser(guildId, gpId, { children: [...(gpD.children || []), pId] });
                         }
                     }
                 }
             }
-        }
-        d1Update.customLinks[id2] = actualRole;
-        d2Update.customLinks[id1] = await getReverseRole(actualRole, d1);
-    } else {
-        d1Update.customLinks[id2] = actualRole;
-        d2Update.customLinks[id1] = await getReverseRole(actualRole, d1);
+            break;
+        case 'frère': case 'soeur':
+            const ps = [d1.father, d1.mother].filter(p => !!p);
+            if (ps.length > 0) {
+                d2Update.father = d1.father; d2Update.mother = d1.mother;
+                for (const pId of ps) {
+                    const pD = await db.getOrCreateUser(guildId, pId);
+                    if (!pD.children.includes(id2)) await db.updateUser(guildId, pId, { children: [...pD.children, id2] });
+                }
+            }
+            d1Update.customLinks[id2] = actualRole;
+            d2Update.customLinks[id1] = await getReverseRole(actualRole, d1);
+            break;
+        case 'grand-père': case 'grand-mère':
+            const parents = [d1.father, d1.mother].filter(p => !!p);
+            if (parents.length > 0) {
+                const pId = parents[Math.floor(Math.random() * parents.length)];
+                const field = (actualRole === 'grand-père') ? 'father' : 'mother';
+                await db.updateUser(guildId, pId, { [field]: id2 });
+                if (!(d2Update.children).includes(pId)) d2Update.children.push(pId);
+            }
+            d1Update.customLinks[id2] = actualRole;
+            d2Update.customLinks[id1] = await getReverseRole(actualRole, d1);
+            break;
+        case 'oncle': case 'tante':
+            const extUA = await getExtendedFamily(guildId, id1);
+            if (extUA.grandparents.size > 0) {
+                for (const gpId of extUA.grandparents) {
+                    const gpD = await db.getOrCreateUser(guildId, gpId);
+                    if (!(gpD.children || []).includes(id2)) await db.updateUser(guildId, gpId, { children: [...(gpD.children || []), id2] });
+                    const gpRel = (d1.customLinks && d1.customLinks[gpId])?.toLowerCase() || '';
+                    if (gpRel.includes('père') && !d2Update.father) d2Update.father = gpId;
+                    else if (gpRel.includes('mère') && !d2Update.mother) d2Update.mother = gpId;
+                }
+            } else {
+                const psUA = [d1.father, d1.mother].filter(p => !!p);
+                if (psUA.length > 0) {
+                    const pId = psUA[Math.floor(Math.random() * psUA.length)];
+                    const pD = await db.getOrCreateUser(guildId, pId);
+                    if (pD.father || pD.mother) {
+                        d2Update.father = pD.father; d2Update.mother = pD.mother;
+                        const gps = [pD.father, pD.mother].filter(g => !!g);
+                        for (const gpId of gps) {
+                            const gpD = await db.getOrCreateUser(guildId, gpId);
+                            if (!gpD.children.includes(id2)) await db.updateUser(guildId, gpId, { children: [...gpD.children, id2] });
+                        }
+                    }
+                }
+            }
+            d1Update.customLinks[id2] = actualRole;
+            d2Update.customLinks[id1] = await getReverseRole(actualRole, d1);
+            break;
+        default:
+            d1Update.customLinks[id2] = actualRole;
+            d2Update.customLinks[id1] = await getReverseRole(actualRole, d1);
     }
 
     await db.updateUser(guildId, id1, d1Update);

@@ -127,25 +127,30 @@ async function mergeFamilies(guildId, inviterFamilyName, invitedFamilyName, invi
         return;
     }
 
+    // On crée un nom de branche pour préserver l'identité (ex: Smith-Jones)
+    const subBranchName = invitedFamilyName.startsWith(inviterFamilyName) 
+        ? invitedFamilyName 
+        : `${inviterFamilyName}-${invitedFamilyName}`.toLowerCase();
+
     // Add all members of the invited family to the inviter's family
     for (const memberId of invitedFamily.members) {
         if (!inviterFamily.members.includes(memberId)) {
             inviterFamily.members.push(memberId);
         }
-        // On stocke la famille d'origine pour permettre la défusion au divorce
-        await updateUser(guildId, memberId, { familyName: inviterFamilyName, previousFamily: invitedFamilyName });
+        // Les membres rejoignent la grande famille sous le nom de leur branche spécifique
+        await updateUser(guildId, memberId, { familyName: subBranchName, previousFamily: invitedFamilyName });
     }
     await updateFamily(guildId, inviterFamilyName, { members: inviterFamily.members });
 
-    // Gestion des branches : On ne renomme PAS si c'est une Tante/Oncle/Cousin pour préserver leur branche
-    if (!['oncle', 'tante', 'cousin', 'cousine'].includes(role.toLowerCase())) {
+    // Gestion des sous-branches existantes de la famille invitée
+    if (inviterFamilyName !== subBranchName) {
         const branches = await familiesCollection.find({ 
             guildId, 
-            familyName: { $regex: new RegExp(`^${invitedFamilyName}-`, 'i') } 
+            familyName: { $regex: new RegExp(`^${invitedFamilyName}`, 'i') } 
         }).toArray();
 
         for (const branch of branches) {
-            const newBranchName = branch.familyName.replace(new RegExp(`^${invitedFamilyName}`, 'i'), inviterFamilyName);
+            const newBranchName = branch.familyName.replace(new RegExp(`^${invitedFamilyName}`, 'i'), subBranchName);
             const newBranchId = `${guildId}_${newBranchName.toLowerCase()}`;
             
             await familiesCollection.deleteOne({ _id: branch._id });
