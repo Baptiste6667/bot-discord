@@ -136,34 +136,34 @@ async function mergeFamilies(guildId, inviterFamilyName, invitedFamilyName, invi
     }
     await updateFamily(guildId, inviterFamilyName, { members: inviterFamily.members });
 
-    // Gestion des branches : Renommer toutes les sous-branches de la lignée fusionnée
-    const branches = await familiesCollection.find({ 
-        guildId, 
-        familyName: { $regex: new RegExp(`^${invitedFamilyName}-`, 'i') } 
-    }).toArray();
+    // Gestion des branches : On ne renomme PAS si c'est une Tante/Oncle/Cousin pour préserver leur branche
+    if (!['oncle', 'tante', 'cousin', 'cousine'].includes(role.toLowerCase())) {
+        const branches = await familiesCollection.find({ 
+            guildId, 
+            familyName: { $regex: new RegExp(`^${invitedFamilyName}-`, 'i') } 
+        }).toArray();
 
-    for (const branch of branches) {
-        const newBranchName = branch.familyName.replace(new RegExp(`^${invitedFamilyName}`, 'i'), inviterFamilyName);
-        const newBranchId = `${guildId}_${newBranchName.toLowerCase()}`;
-        
-        // On recrée la branche sous son nouveau nom hiérarchique
-        await familiesCollection.deleteOne({ _id: branch._id });
-        await familiesCollection.insertOne({
-            ...branch,
-            _id: newBranchId,
-            familyName: newBranchName.toLowerCase()
-        });
+        for (const branch of branches) {
+            const newBranchName = branch.familyName.replace(new RegExp(`^${invitedFamilyName}`, 'i'), inviterFamilyName);
+            const newBranchId = `${guildId}_${newBranchName.toLowerCase()}`;
+            
+            await familiesCollection.deleteOne({ _id: branch._id });
+            await familiesCollection.insertOne({
+                ...branch,
+                _id: newBranchId,
+                familyName: newBranchName.toLowerCase()
+            });
 
-        for (const mId of branch.members) {
-            await updateUser(guildId, mId, { familyName: newBranchName.toLowerCase() });
+            for (const mId of branch.members) {
+                await updateUser(guildId, mId, { familyName: newBranchName.toLowerCase() });
+            }
         }
     }
 
-    // Pont relationnel logique
     const inviter = await getOrCreateUser(guildId, inviterId);
     const invited = await getOrCreateUser(guildId, invitedId);
 
-    if (role === 'oncle' || role === 'tante') {
+    if (['oncle', 'tante', 'cousin', 'cousine'].includes(role.toLowerCase())) {
         // La cible devient le frère/soeur d'un des parents de l'inviteur
         const parentId = inviter.father || inviter.mother;
         if (parentId) {
@@ -196,12 +196,15 @@ async function mergeFamilies(guildId, inviterFamilyName, invitedFamilyName, invi
         }
     } else if (role === 'grand-père' || role === 'grand-mère') {
         // La cible devient le parent d'un des parents de l'inviteur
-        const parentId = inviter.father || inviter.mother;
+        // S'il y a deux parents, on en choisit un au hasard (simulant le côté paternel/maternel)
+        const possibleParents = [inviter.father, inviter.mother].filter(p => p !== null);
+        const parentId = possibleParents[Math.floor(Math.random() * possibleParents.length)];
+        
         if (parentId) {
             const pData = await getOrCreateUser(guildId, parentId);
             if (pData) {
-                const field = role === 'grand-père' ? 'father' : 'mother';
-                await updateUser(guildId, parentId, { [field]: invitedId });
+                const field = (role === 'grand-père') ? 'father' : 'mother';
+                await updateUser(guildId, parentId, { [field]: invitedId, previousFamily: invitedFamilyName });
             }
             if (invited && !invited.children.includes(parentId)) {
                 invited.children.push(parentId);

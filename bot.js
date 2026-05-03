@@ -52,6 +52,24 @@ const ROLES_LIST = [
     'grand-père', 'grand-mère'
 ];
 
+/** --- AJUSTEMENT DU GENRE --- **/
+function getGenderedRole(role, gender) {
+    if (!gender) return role;
+    const mapping = {
+        'père': { 'féminin': 'mère' },
+        'mère': { 'masculin': 'père' },
+        'frère': { 'féminin': 'soeur' },
+        'soeur': { 'masculin': 'frère' },
+        'oncle': { 'féminin': 'tante' },
+        'tante': { 'masculin': 'oncle' },
+        'cousin': { 'féminin': 'cousine' },
+        'cousine': { 'masculin': 'cousin' },
+        'grand-père': { 'féminin': 'grand-mère' },
+        'grand-mère': { 'masculin': 'grand-père' }
+    };
+    return mapping[role.toLowerCase()]?.[gender] || role.toLowerCase();
+}
+
 /** --- UTILITAIRES --- **/
 const formatMention = (id) => `<@${id}>`;
 const errorEmbed = (text) => new EmbedBuilder().setColor('#ff4757').setDescription(`❌ ${text}`);
@@ -146,7 +164,7 @@ async function sendFamilyDisplay(ctx, guildId, targetId, isGlobal = false) {
     const [buffer, ext, membersWealth] = await Promise.all([
         generateFamilyImage(client, guildId, targetId, isGlobal),
         getExtendedFamily(guildId, targetId),
-        Promise.all(family.members.map(id => getUBUser(guildId, id)))
+        Promise.all((family.members || []).map(id => getUBUser(guildId, id)))
     ]);
 
     const totalWealth = membersWealth.reduce((acc, res) => acc + (res ? res.cash : 0), 0);
@@ -165,7 +183,7 @@ async function sendFamilyDisplay(ctx, guildId, targetId, isGlobal = false) {
             { name: '💰 Fortune Totale', value: `**${totalWealth.toLocaleString()}** cr.`, inline: true },
             { name: '📅 Création', value: family.createdAt ? new Date(family.createdAt).toLocaleDateString('fr-FR') : 'Inconnue', inline: true },
             { name: '💍 Union', value: spouseText, inline: true },
-            { name: '👨‍👩‍👧 Lignée Directe', value: `**Parents:** ${parentsText}\n**Enfants:** ${childrenText}`, inline: false },
+            { name: '👨‍👩‍👧 Lignée Directe (Vue Relative)', value: `**Parents:** ${parentsText}\n**Enfants:** ${childrenText}`, inline: false },
             { name: '🌳 Parenté Étendue', value: `**Fratrie:** ${Array.from(ext.siblings).map(formatMention).join(', ') || 'Aucun'} | **Grands-Parents:** ${Array.from(ext.grandparents).map(formatMention).join(', ') || 'Aucun'} | **Oncles/Tantes:** ${Array.from(ext.unclesAunts).map(formatMention).join(', ') || 'Aucun'} | **Cousins:** ${Array.from(ext.cousins).map(formatMention).join(', ') || 'Aucun'}`, inline: false }
         ).setTimestamp();
 
@@ -225,6 +243,7 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
         
         const user = client.users.cache.get(id) || (typeof id === 'string' ? await client.users.fetch(id).catch(() => null) : null);
         const dbUser = await db.getOrCreateUser(guildId, id);
+        const genderedRole = getGenderedRole(roleText, dbUser.gender);
         const name = (user ? user.username : id)?.toString() || "Inconnu";
         const isHead = family?.head === id;
         const famName = dbUser.familyName ? dbUser.familyName.split('-famille')[0].toUpperCase() : "SANS NOM";
@@ -253,10 +272,7 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
                 ctx.font = 'bold 16px "MyCustomFont", sans-serif';
                 ctx.fillText(String(name).substring(0, 12), x - 15, y - 10);
                 
-                // Dessin du rôle
-                ctx.font = '13px "MyCustomFont", sans-serif';
-                ctx.fillStyle = '#ffffff';
-                ctx.fillText(String((isHead ? "👑 " : "") + roleText), x - 15, y + 10);
+                ctx.fillText(String((isHead ? "👑 " : "") + genderedRole), x - 15, y + 10);
 
                 // Dessin du nom de famille spécifique au membre
                 ctx.font = 'italic 11px sans-serif';
@@ -290,7 +306,7 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
         ctx.fillStyle = '#ffffff';
         ctx.font = '26px "MyCustomFont", sans-serif'; // Utiliser l'alias et un fallback générique
         ctx.textAlign = 'center';
-        ctx.fillText(String(isGlobal ? `GÉNÉALOGIE COMPLÈTE : ${family.familyName.toUpperCase()}` : `BRANCHE : ${family.familyName.toUpperCase()}`), centerX, 45);
+        ctx.fillText(String(isGlobal ? `VUE GLOBALE : ${family.familyName.toUpperCase()}` : `FOCUS BRANCHE : ${family.familyName.toUpperCase()}`), centerX, 45);
         ctx.restore();
     }
 
@@ -357,7 +373,9 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
     if (userData.spouse) await drawNode(userData.spouse, centerX + 200, centerY, "Conjoint(e)");
     for (let i = 0; i < parents.length; i++) {
         const xPos = centerX - 130 + (i * 260);
-        await drawNode(parents[i], xPos, 130, parents[i] === userData.father ? "Père" : "Mère");
+        const pData = await db.getOrCreateUser(guildId, parents[i]);
+        const pLabel = pData.gender === 'féminin' ? 'Mère' : (pData.gender === 'masculin' ? 'Père' : 'Parent');
+        await drawNode(parents[i], xPos, 130, pLabel);
     }
     for (let i = 0; i < membersToDraw.length; i++) {
         await drawNode(membersToDraw[i], childrenPos[i], 430, isGlobal ? "Branche" : "Enfant");
@@ -380,16 +398,16 @@ async function getExtendedFamily(guildId, userId) {
     const parents = [user.father, user.mother].filter(p => !!p);
     const parentDataArray = await db.getUsersByIds(guildId, parents);
     
-    for (const parentData of parentDataArray) {
+    for (const parentData of (parentDataArray || [])) {
         for (const cId of (parentData?.children || [])) {
             if (cId !== userId) siblings.add(cId);
         }
-        if (parentData.father) grandparents.add(parentData.father);
-        if (parentData.mother) grandparents.add(parentData.mother);
+        if (parentData?.father) grandparents.add(parentData.father);
+        if (parentData?.mother) grandparents.add(parentData.mother);
     }
 
     const gpDataArray = await db.getUsersByIds(guildId, Array.from(grandparents));
-    const uaIds = [];
+    const uaIds = []; 
     for (const gpData of gpDataArray) {
         for (const childId of (gpData.children || [])) {
             if (!parents.includes(childId)) {
@@ -467,12 +485,14 @@ async function propagateNameChange(guildId, userId, oldName, newName) { // No lo
 async function areRelated(guildId, id1, id2) { // Made async
     if (id1 === id2) return 'soi-même';
     const u1 = await db.getOrCreateUser(guildId, id1);
+    const u2 = await db.getOrCreateUser(guildId, id2);
     
     if (u1.customLinks && u1.customLinks[id2]) return u1.customLinks[id2];
     if (u1.spouse === id2) return 'conjoint(e)';
     if (u1.father === id2) return 'père';
     if (u1.mother === id2) return 'mère';
     if (u1.children.includes(id2)) return 'enfant';
+    if (u2.children.includes(id1)) return 'parent';
 
     const ext = await getExtendedFamily(guildId, id1); // Call async version
     if (ext.siblings.has(id2)) return 'frère/soeur';
@@ -493,6 +513,8 @@ const client = new Client({
 });
 // --- Logique de modification des liens --- (Now async)
 async function executeLinkChange(guildId, id1, id2, role, action) { // No longer needs `data`
+    if (id1 === id2) return; // Sécurité anti-boucle
+
     const d1 = await db.getOrCreateUser(guildId, id1);
     const d2 = await db.getOrCreateUser(guildId, id2);
 
@@ -527,7 +549,9 @@ async function executeLinkChange(guildId, id1, id2, role, action) { // No longer
         return;
     }
 
-    if (role === 'conjoint') {
+    const actualRole = getGenderedRole(role, d2.gender);
+
+    if (actualRole === 'conjoint' || actualRole === 'mari' || actualRole === 'femme') {
         d1Update.spouse = id2; d2Update.spouse = id1;
 
         // Partage des enfants existants lors du mariage (famille recomposée)
@@ -537,17 +561,19 @@ async function executeLinkChange(guildId, id1, id2, role, action) { // No longer
         // Note: On ne définit plus automatiquement le nouveau conjoint comme parent des enfants pré-existants
     } else if (role === 'couple') {
         d1Update.couple = id2; d2Update.couple = id1;
-    } else if (role === 'père' || role === 'mère') {
-        const field = role === 'père' ? 'father' : 'mother';
-        d1Update[field] = id2;
+    } else if (actualRole === 'père' || actualRole === 'mère') {
+        // On remplit le premier slot de parent libre (father ou mother)
+        if (!d1.father || d1.father === id2) d1Update.father = id2;
+        else d1Update.mother = id2;
         if (!d2Update.children.includes(id1)) d2Update.children.push(id1);
-    } else if (role === 'enfant') {
+    } else if (actualRole === 'enfant') {
         if (!d1Update.children.includes(id2)) d1Update.children.push(id2);
-        const genderField = d1.gender === 'féminin' ? 'mother' : 'father';
-        d2Update[genderField] = id1;
+        // On remplit le premier slot libre chez l'enfant
+        if (!d2.father || d2.father === id1) d2Update.father = id1;
+        else d2Update.mother = id1;
     } else {
-        d1Update.customLinks = { ...(d1Update.customLinks || d1.customLinks), [id2]: role };
-        d2Update.customLinks = { ...(d2Update.customLinks || d2.customLinks), [id1]: await getReverseRole(role, d1) };
+        d1Update.customLinks = { ...(d1Update.customLinks || d1.customLinks), [id2]: actualRole };
+        d2Update.customLinks = { ...(d2Update.customLinks || d2.customLinks), [id1]: await getReverseRole(actualRole, d1) };
     }
 
     await db.updateUser(guildId, id1, d1Update);
@@ -664,6 +690,7 @@ async function startMajorityMergeVote(guildId, interaction, author, target, targ
     const voteMsg = await interaction.channel.send({ content: membersToVote.map(id => formatMention(id)).join(' '), embeds: [voteEmbed], components: [row] });
     
     const votesYes = new Set();
+    const votesNo = new Set();
     const collector = voteMsg.createMessageComponentCollector({ 
         filter: (i) => membersToVote.includes(i.user.id),
         time: 120000 
@@ -709,34 +736,32 @@ async function startMajorityMergeVote(guildId, interaction, author, target, targ
 async function sendInvitation(guildId, interaction, author, target, role, action, fromVote = false) {
     const authorData = await db.getOrCreateUser(guildId, author.id);
     const targetData = await db.getOrCreateUser(guildId, target.id);
+    const targetFamily = targetData.familyName ? await db.getFamily(guildId, targetData.familyName) : null;
+    const isAlone = !targetFamily || targetFamily.members.length <= 1;
 
     let inviteEmbed = new EmbedBuilder()
         .setTitle("📩 Invitation Familiale")
         .setColor("#FFD700")
         .setDescription(`${target}, **${author.username}** souhaite vous lier en tant que **${role}**.\n${fromVote ? "*(Approuvé par vote)*" : ""}\n\nAcceptez-vous de rejoindre cette famille ?`)
-        .setFooter({ text: "Acceptez-vous de rejoindre cette famille ?" });
+        .setFooter({ text: "Réponse attendue sous 5 minutes." });
 
     let row;
-    if (targetData.familyName && authorData.familyName && targetData.familyName !== authorData.familyName && role !== 'conjoint') {
-        inviteEmbed.setDescription(`${target}, **${author.username}** souhaite vous lier en tant que **${role}**.\n\nVous avez déjà une famille (**${targetData.familyName.toUpperCase()}**). Voulez-vous fusionner vos lignées ou quitter la vôtre ?`);
+    if (!isAlone && authorData.familyName && targetData.familyName !== authorData.familyName && role !== 'conjoint') {
+        inviteEmbed.setDescription(`${target}, **${author.username}** souhaite vous lier en tant que **${role}**.\n\nVous faites partie de la lignée **${targetData.familyName.toUpperCase()}**. Souhaitez-vous venir seul ou fusionner toute votre lignée ?`);
         row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('i_ok').setLabel('Accepter & Quitter').setStyle(ButtonStyle.Success),
-            new ButtonBuilder().setCustomId('i_merge').setLabel('Fusionner').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('i_ok').setLabel('Rejoindre Seul').setStyle(ButtonStyle.Primary),
+            new ButtonBuilder().setCustomId('i_merge').setLabel('Fusionner Lignée').setStyle(ButtonStyle.Success),
             new ButtonBuilder().setCustomId('i_no').setLabel('Refuser').setStyle(ButtonStyle.Danger)
         );
     } else {
         const buttons = [
             new ButtonBuilder().setCustomId('i_ok').setLabel('Accepter').setStyle(ButtonStyle.Success)
         ];
-        // On ne propose pas de créer une branche pour les tantes (ou oncles) pour garder les noms unis
-        if (!['tante', 'oncle'].includes(role.toLowerCase())) {
-            buttons.push(new ButtonBuilder().setCustomId('i_branch').setLabel('Rejoindre & Créer Branche').setStyle(ButtonStyle.Primary));
-        }
+        // Le bouton Branche n'est plus proposé directement aux personnes seules pour simplifier l'entrée
         buttons.push(new ButtonBuilder().setCustomId('i_no').setLabel('Refuser').setStyle(ButtonStyle.Danger));
         row = new ActionRowBuilder().addComponents(buttons);
     }
 
-    // Sécurité accrue pour déterminer si on doit utiliser reply ou editReply
     const msg = (interaction.replied || interaction.deferred) 
         ? await interaction.editReply({ content: `${target}`, embeds: [inviteEmbed], components: [row] })
         : await interaction.reply({ content: `${target}`, embeds: [inviteEmbed], components: [row], fetchReply: true });
@@ -747,7 +772,7 @@ async function sendInvitation(guildId, interaction, author, target, role, action
         if (i.user.id !== target.id) return i.reply({ content: "Ce n'est pas pour vous.", flags: MessageFlags.Ephemeral });
 
         if (i.customId === 'i_ok' || i.customId === 'i_branch') {
-            if (targetData.familyName && authorData.familyName && targetData.familyName !== authorData.familyName) await clearUserFamilyLinks(guildId, target.id);
+            if (targetData.familyName && authorData.familyName && targetData.familyName !== authorData.familyName) await db.clearUserFamilyLinksDB(guildId, target.id);
             await executeLinkChange(guildId, author.id, target.id, role, action);
             if (authorData.familyName) {
                 let targetFamName = authorData.familyName;
@@ -769,7 +794,7 @@ async function sendInvitation(guildId, interaction, author, target, role, action
             await i.message.delete().catch(() => {});
             await i.channel.send(`🎊 Félicitations ! ${target} est maintenant le/la **${role}** de ${author}${i.customId === 'i_branch' ? " et a fondé sa propre branche" : ""} !`);
         } else if (i.customId === 'i_merge') {
-        await db.mergeFamilies(guildId, authorData.familyName, targetData.familyName, author.id, target.id, role);
+            await startMajorityMergeVote(guildId, i, author, target, targetFamily, role);
             await executeLinkChange(guildId, author.id, target.id, role, action);
             await i.message.delete().catch(() => {});
             await i.channel.send(`🤝 Les familles ont fusionné ! ${target} est maintenant le/la **${role}** de ${author} !`);
@@ -799,7 +824,7 @@ client.on('messageCreate', async (message) => {
     
     // On définit les commandes dont on veut garder la trace (social et info)
     // Seuls help, account, familytop et les interactions sociales restent affichés.
-    const persistentCommands = ['help', 'account', 'familytop', 'familyhistory', 'fh', 'ask', 'end', 'marry', 'divorce', 'love-calc', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold', 'listfamilies'];
+    const persistentCommands = ['help', 'account', 'familytop', 'familyhistory', 'fh', 'ask', 'end', 'marry', 'divorce', 'love-calc', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold', 'listfamilies', 'admininfo'];
 
     // Suppression automatique du message utilisateur si la commande n'est pas persistante
     if (!persistentCommands.includes(command)) safeDelete(message);
@@ -890,7 +915,7 @@ client.on('messageCreate', async (message) => {
                     const memberOptions = await Promise.all(filteredMembers.map(async (mId) => {
                         const user = client.users.cache.get(mId) || await client.users.fetch(mId).catch(() => null);
                         return { label: user ? user.username : mId, value: mId };
-                    }));
+                            })); 
                     targetSelectRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('target').setPlaceholder(`Choisir le membre à ${action === 'remove' ? 'retirer' : 'modifier'}...`).addOptions(memberOptions));
                 }
                 await i.update({ content: `Action: **${action}**. Sélectionnez le membre.`, components: [targetSelectRow], embeds: [] });
@@ -1029,7 +1054,7 @@ client.on('messageCreate', async (message) => {
                     if (!family || !targetId) return message.reply({ embeds: [errorEmbed("Famille introuvable (utilisez un nom, une mention ou un ID).")] });
                     
                     // Si c'est une demande de lignée complète, on part du chef
-                    await sendFamilyDisplay(message, guildId, isGlobalArg ? family.head : targetId, isGlobalArg);
+                    await sendFamilyDisplay(message, guildId, targetId, isGlobalArg);
                     return; // Ne pas supprimer
                 }
 
@@ -1100,9 +1125,8 @@ client.on('messageCreate', async (message) => {
                     if (i.customId === 'view_branch' || i.customId === 'view_global') {
                     await i.deferUpdate();
                     await msg.delete().catch(() => {}); // Suppression du menu pour éviter les 40 messages
-                    const family = await db.getFamily(guildId, authorData.familyName);
-                    const targetId = i.customId === 'view_global' ? family.head : authorId;
-                    await sendFamilyDisplay(i, guildId, targetId, i.customId === 'view_global');
+                    // On reste centré sur l'utilisateur même en vue globale si demandé depuis son dashboard
+                    await sendFamilyDisplay(i, guildId, authorId, i.customId === 'view_global');
                     return;
                 }
                 
@@ -1156,10 +1180,33 @@ client.on('messageCreate', async (message) => {
                     }
                     
                     if (action === 'leave') {
-                        await i.deferUpdate();
+                        const isBranch = authorData.familyName && authorData.familyName.includes('-');
+                        if (isBranch) {
+                            const leaveRow = new ActionRowBuilder().addComponents(
+                                new ButtonBuilder().setCustomId('leave_alone').setLabel('Quitter Seul').setStyle(ButtonStyle.Primary),
+                                new ButtonBuilder().setCustomId('leave_branch').setLabel('Quitter avec ma Branche').setStyle(ButtonStyle.Danger)
+                            );
+                            return i.update({ content: "Voulez-vous quitter la lignée seul ou emmener toute votre branche avec vous ?", components: [leaveRow] });
+                        } else {
+                            await i.deferUpdate();
+                            await clearUserFamilyLinks(guildId, authorId);
+                            return i.editReply({ content: `👋 ${message.author} a quitté sa famille.`, components: [], embeds: [] });
+                        }
+                    }
+
+                    if (i.customId === 'leave_alone') {
+                        await db.clearUserFamilyLinksDB(guildId, authorId);
+                        return i.update({ content: "✅ Vous avez quitté la famille.", components: [] });
+                    }
+
+                    if (i.customId === 'leave_branch') {
+                        const branch = await db.getFamily(guildId, authorData.familyName);
+                        if (branch.members.length > 1) {
+                            // Vote au sein de la branche uniquement
+                            return startMajorityMergeVote(guildId, i, author, author, branch, "Départ de Branche");
+                        }
                         await clearUserFamilyLinks(guildId, authorId);
-                        await msg.delete().catch(() => {});
-                        return i.channel.send(`👋 ${message.author} a quitté sa famille.`);
+                        return i.update({ content: "✅ Branche dissoute.", components: [] });
                     }
 
                     let targetSelectRow;
@@ -1208,7 +1255,7 @@ client.on('messageCreate', async (message) => {
 
                         if (action === 'remove') return startFamilyVote(guildId, ui, message.author, targetUser, 'Aucun', 'remove');
 
-                        const rMenu = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('r').setPlaceholder('Rôle...').addOptions(ROLES_LIST.map(r => ({ label: r, value: r }))));
+                        const rMenu = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('r').setPlaceholder('Choisir le rôle...').addOptions(ROLES_LIST.map(r => ({ label: r, value: r }))));
                         const rCancel = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('c_r').setLabel('Annuler').setStyle(ButtonStyle.Danger));
                         await ui.editReply({ content: `Rôle pour <@${targetUser.id}> :`, components: [rMenu, rCancel] });
 
@@ -1216,6 +1263,81 @@ client.on('messageCreate', async (message) => {
                             filter: subI => subI.user.id === authorId && ['r', 'c_r'].includes(subI.customId), 
                             time: 60000 
                         });
+                        
+                        const selectedRole = ri.values?.[0];
+                        
+                        // Logique spécifique : si on ajoute un enfant, on demande qui est le parent dans la famille
+                        if (selectedRole === 'enfant') {
+                            const family = await db.getFamily(guildId, authorData.familyName);
+                            const potentialParents = await Promise.all(family.members.map(async id => {
+                                const u = client.users.cache.get(id) || await client.users.fetch(id).catch(() => null); 
+                                return { label: u?.username || id, value: id };
+                            }));
+                            
+                            const pMenu = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('p_select').setPlaceholder('Qui est le parent ?').addOptions(potentialParents.slice(0, 25)));
+                            await ri.update({ content: `Sélectionnez le parent de **${targetUser.username}** au sein de la famille :`, components: [pMenu] });
+                            
+                            const pi = await i.message.awaitMessageComponent({ filter: subI => subI.user.id === authorId && subI.customId === 'p_select', time: 60000 });
+                            const parentId = pi.values[0];
+                            
+                            // Vérification : Empêcher d'adopter son conjoint
+                            const checkRel = await areRelated(guildId, parentId, targetId);
+                            if (checkRel === 'conjoint(e)' || checkRel === 'mari' || checkRel === 'femme') {
+                                return pi.reply({ content: "❌ Impossible d'adopter votre conjoint(e) comme enfant !", flags: MessageFlags.Ephemeral });
+                            }
+
+                            if (parentId === targetId) return pi.reply({ content: "❌ Un membre ne peut pas être son propre parent !", flags: MessageFlags.Ephemeral });
+
+                            const parentData = await db.getOrCreateUser(guildId, parentId);
+
+                            // SI LE PARENT A UN CONJOINT : Proposer l'adoption par les deux
+                            if (parentData.spouse) {
+                                const spouseUser = await client.users.fetch(parentData.spouse);
+                                const adoptRow = new ActionRowBuilder().addComponents(
+                                    new ButtonBuilder().setCustomId('adopt_both').setLabel(`Les deux (${spouseUser.username})`).setStyle(ButtonStyle.Success),
+                                    new ButtonBuilder().setCustomId('adopt_single').setLabel('Seulement lui/elle').setStyle(ButtonStyle.Secondary)
+                                );
+                                await pi.update({ content: `**${parentData.spouse ? 'Couple détecté' : ''}** : Souhaitez-vous lier l'enfant aux deux parents ?`, components: [adoptRow] });
+                                const ai = await i.message.awaitMessageComponent({ filter: subI => subI.user.id === authorId, time: 30000 });
+                                if (ai.customId === 'adopt_both') {
+                                    await executeLinkChange(guildId, parentData.spouse, targetId, 'enfant', 'add');
+                                }
+                                await ai.deferUpdate();
+                            }
+                            
+                            if (action === 'add') await sendInvitation(guildId, pi, { id: parentId, username: (await client.users.fetch(parentId)).username }, targetUser, 'enfant', 'add');
+                            else {
+                                await executeLinkChange(guildId, parentId, targetId, 'enfant', 'add');
+                                await pi.update({ content: "✅ Lien de parenté mis à jour.", components: [] });
+                            }
+                            return;
+                        }
+
+                        // Logique spécifique : Ajouter un parent à n'importe qui
+                        if (['père', 'mère'].includes(selectedRole)) {
+                             const family = await db.getFamily(guildId, authorData.familyName);
+                             const potentialChildren = await Promise.all(family.members.map(async id => {
+                                const u = client.users.cache.get(id) || await client.users.fetch(id).catch(() => null);
+                                return { label: u?.username || id, value: id };
+                            }));
+
+                            const pMenu = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('c_select').setPlaceholder('De qui est-il le parent ?').addOptions(potentialChildren.slice(0, 25)));
+                            await ri.update({ content: `Vous ajoutez un(e) **${selectedRole}**. Sélectionnez son enfant dans la famille :`, components: [pMenu] });
+                            
+                            const pi = await i.message.awaitMessageComponent({ filter: subI => subI.user.id === authorId && subI.customId === 'c_select', time: 60000 });
+                            const parentId = pi.values[0];
+
+                            if (parentId === targetId) return pi.reply({ content: "❌ Un membre ne peut pas être son propre enfant !", flags: MessageFlags.Ephemeral });
+                            
+                            // On modifie l'exécution pour cibler le bon parent
+                            if (action === 'add') await sendInvitation(guildId, pi, { id: parentId, username: (await client.users.fetch(parentId)).username }, targetUser, 'enfant', 'add');
+                            else {
+                                await executeLinkChange(guildId, parentId, targetId, 'enfant', 'add');
+                                await pi.update({ content: "✅ Lien de parenté mis à jour.", components: [] });
+                            }
+                            return;
+                        }
+
                         await ri.deferUpdate();
 
                         if (ri.customId === 'c_r') return msg.delete();
@@ -1488,6 +1610,11 @@ client.on('messageCreate', async (message) => {
             if (authorData.spouse) return message.reply(`Tu es déjà marié(e) à ${formatMention(authorData.spouse)}.`);
             if (targetData.spouse) return message.reply(`${formatMention(target.id)} est déjà marié(e).`);
 
+            const rel = await areRelated(guildId, authorId, target.id);
+            if (['père', 'mère', 'enfant', 'parent', 'frère/soeur'].includes(rel)) {
+                return message.reply(`❌ Opération interdite ! Tu ne peux pas épouser un membre de ta famille proche (**${rel}**).`);
+            }
+
             const marryEmbed = new EmbedBuilder()
                 .setTitle("💖 Demande en Mariage")
                 .setColor("#FF69B4")
@@ -1721,10 +1848,15 @@ client.on('messageCreate', async (message) => {
             }
         }
 
+        case 'admininfo':
         case 'info': {
-            let targetUser = target; // Cette commande ne sera pas auto-supprimée
+            const isAdminCmd = command === 'admininfo';
+            if (isAdminCmd && !message.member.permissions.has(PermissionFlagsBits.Administrator)) {
+                return message.channel.send({ embeds: [errorEmbed("Admin uniquement.")] });
+            }
+
+            let targetUser = target;
             if (!targetUser && args[0]) {
-                // Tente de récupérer l'utilisateur par ID si aucune mention n'est présente
                 targetUser = client.users.cache.get(args[0]) || await client.users.fetch(args[0]).catch(() => null);
             }
             if (!targetUser) targetUser = message.author;
@@ -1732,80 +1864,95 @@ client.on('messageCreate', async (message) => {
             const userData = await db.getOrCreateUser(guildId, targetUser.id);
             const family = userData.familyName ? await db.getFamily(guildId, userData.familyName) : null;
 
-            const buildEmbed = () => new EmbedBuilder()
-                .setTitle(`Profil Familial - ${targetUser.username}`)
-                .setColor('#3498db')
-                .addFields(
-                    { name: '🏷️ Nom de Famille', value: userData.familyName ? userData.familyName.toUpperCase() : 'Aucun', inline: true },
-                    { name: '🎭 Rang', value: family?.head === targetUser.id ? "Chef" : (userData.familyName ? "Membre" : "Aucun"), inline: true },
-                    { name: '👤 Genre', value: userData.gender || 'Non défini', inline: true },
-                    { name: '📝 Bio', value: userData.bio || 'Aucune bio définie.', inline: false },
-                    { name: '💕 Relation', value: userData.spouse ? `Marié(e) à ${formatMention(userData.spouse)}` : (userData.couple ? `En couple avec ${formatMention(userData.couple)}` : 'Célibataire'), inline: true },
-                    { name: '👨 Père', value: userData.father ? formatMention(userData.father) : 'Inconnu', inline: true },
-                    { name: '👩 Mère', value: userData.mother ? formatMention(userData.mother) : 'Inconnue', inline: true }
-                );
+            const buildEmbed = async () => {
+                const fData = userData.father ? await db.getOrCreateUser(guildId, userData.father) : null;
+                const mData = userData.mother ? await db.getOrCreateUser(guildId, userData.mother) : null;
+                const fLabel = fData?.gender === 'féminin' ? '👩 Mère (1)' : '👨 Père';
+                const mLabel = mData?.gender === 'masculin' ? '👨 Père (2)' : '👩 Mère';
+
+                return new EmbedBuilder()
+                    .setTitle(`Profil Familial - ${targetUser.username}`)
+                    .setColor('#3498db')
+                    .addFields(
+                        { name: '🏷️ Nom de Famille', value: userData.familyName ? userData.familyName.toUpperCase() : 'Aucun', inline: true },
+                        { name: '🎭 Rang', value: family?.head === targetUser.id ? "Chef" : (userData.familyName ? "Membre" : "Aucun"), inline: true },
+                        { name: '👤 Genre', value: userData.gender || 'Non défini', inline: true },
+                        { name: '📝 Bio', value: userData.bio || 'Aucune bio définie.', inline: false },
+                        { name: '💕 Relation', value: userData.spouse ? `Marié(e) à ${formatMention(userData.spouse)}` : (userData.couple ? `En couple avec ${formatMention(userData.couple)}` : 'Célibataire'), inline: true },
+                        { name: fLabel, value: userData.father ? formatMention(userData.father) : 'Inconnu', inline: true },
+                        { name: mLabel, value: userData.mother ? formatMention(userData.mother) : 'Inconnue', inline: true }
+                    );
+            };
 
             const row = new ActionRowBuilder().addComponents(
-                new ButtonBuilder().setCustomId('edit_p').setLabel('✏️ Modifier Profil').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId(`edit_p_${targetUser.id}`).setLabel('✏️ Modifier Profil').setStyle(ButtonStyle.Primary),
                 new ButtonBuilder().setCustomId('cancel_info').setLabel('Fermer').setStyle(ButtonStyle.Secondary)
             );
-            const msg = await message.channel.send({ embeds: [buildEmbed()], components: targetUser.id === authorId ? [row] : [] });
+
+            const canEdit = targetUser.id === authorId || isAdminCmd;
+            const msg = await message.channel.send({ embeds: [await buildEmbed()], components: canEdit ? [row] : [] });
 
             const coll = msg.createMessageComponentCollector({ time: 60000 });
             coll.on('collect', async (i) => {
-                if (i.user.id !== authorId) return i.reply({ content: "❌ Seul le propriétaire du profil peut modifier ces informations.", flags: MessageFlags.Ephemeral });
+                if (i.user.id !== authorId) return i.reply({ content: "❌ Seul l'invocateur peut interagir.", flags: MessageFlags.Ephemeral });
                 
                 if (i.customId === 'cancel_info') {
                     await i.deferUpdate();
                     return msg.delete().catch(() => {});
                 }
-                if (i.customId === 'back_info') {
-                    return i.update({ content: null, embeds: [buildEmbed()], components: [row] });
+                if (i.customId.startsWith('back_info_')) {
+                    return i.update({ content: null, embeds: [await buildEmbed()], components: [row] });
                 }
-                if (i.customId === 'edit_p') {
+                if (i.customId.startsWith('edit_p_')) {
+                    const tid = i.customId.split('_')[2];
                     const editRow1 = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId('btn_bio').setLabel('Ma Bio').setStyle(ButtonStyle.Secondary).setEmoji('📝'),
-                        new ButtonBuilder().setCustomId('btn_gender').setLabel('Mon Genre').setStyle(ButtonStyle.Secondary).setEmoji('👤')
+                        new ButtonBuilder().setCustomId(`btn_bio_${tid}`).setLabel('Bio').setStyle(ButtonStyle.Secondary).setEmoji('📝'),
+                        new ButtonBuilder().setCustomId(`btn_gender_${tid}`).setLabel('Genre').setStyle(ButtonStyle.Secondary).setEmoji('👤')
                     );
                     const editRow2 = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId('btn_name').setLabel('Renommer Branche').setStyle(ButtonStyle.Secondary).setEmoji('🏷️'),
-                        new ButtonBuilder().setCustomId('btn_spouse').setLabel('Nom Conjoint').setStyle(ButtonStyle.Secondary).setEmoji('💍')
+                        new ButtonBuilder().setCustomId(`btn_name_${tid}`).setLabel('Renommer Branche').setStyle(ButtonStyle.Secondary).setEmoji('🏷️'),
+                        new ButtonBuilder().setCustomId(`btn_spouse_${tid}`).setLabel('Nom Conjoint').setStyle(ButtonStyle.Secondary).setEmoji('💍')
                     );
                     const editRow3 = new ActionRowBuilder().addComponents(
-                        new ButtonBuilder().setCustomId('back_info').setLabel('Retour').setStyle(ButtonStyle.Danger)
+                        new ButtonBuilder().setCustomId(`back_info_${tid}`).setLabel('Retour').setStyle(ButtonStyle.Danger)
                     );
-                    return i.update({ content: "**Que souhaitez-vous modifier ?**", embeds: [], components: [editRow1, editRow2, editRow3] });
+                    return i.update({ content: `**Modification du profil de <@${tid}>**`, embeds: [], components: [editRow1, editRow2, editRow3] });
                 }
-                if (i.customId === 'btn_bio') {
-                    const modal = new ModalBuilder().setCustomId('modal_bio').setTitle('Ma Bio');
+                if (i.customId.startsWith('btn_bio_')) {
+                    const tid = i.customId.split('_')[2];
+                    const modal = new ModalBuilder().setCustomId(`modal_bio_${tid}`).setTitle('Modifier la Bio');
                     modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('bio_text').setLabel("Description").setStyle(TextInputStyle.Paragraph).setRequired(true)));
                     return i.showModal(modal);
                 }
-                if (i.customId === 'btn_gender') {
-                    const gRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('sel_gen').setPlaceholder('Genre...')
+                if (i.customId.startsWith('btn_gender_')) {
+                    const tid = i.customId.split('_')[2];
+                    const gRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId(`sel_gen_${tid}`).setPlaceholder('Genre...')
                         .addOptions([{ label: 'Masculin', value: 'masculin' }, { label: 'Féminin', value: 'féminin' }, { label: 'Autre', value: 'autre' }]));
                     return i.update({ content: "Choisissez votre genre :", components: [gRow] });
                 }
-                if (i.customId === 'sel_gen') {
-                    await db.updateUser(guildId, authorId, { gender: i.values[0] }); // La réponse est persistante
+                if (i.customId.startsWith('sel_gen_')) {
+                    const tid = i.customId.split('_')[2];
+                    await db.updateUser(guildId, tid, { gender: i.values[0] });
                     return i.update({ content: "✅ Genre mis à jour.", components: [] }); 
                 }
-                if (i.customId === 'btn_name') {
-                    const modal = new ModalBuilder().setCustomId('modal_rename_branch').setTitle('Nom de Branche');
+                if (i.customId.startsWith('btn_name_')) {
+                    const tid = i.customId.split('_')[2];
+                    const modal = new ModalBuilder().setCustomId(`modal_rename_branch_${tid}`).setTitle('Nom de Branche');
                     modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('new_name').setLabel("Nouveau nom").setStyle(TextInputStyle.Short).setRequired(true)));
                     return i.showModal(modal);
                 }
-                if (i.customId === 'btn_spouse') {
-                    if (!authorData.spouse) return i.reply({ content: "Pas de conjoint.", flags: MessageFlags.Ephemeral });
-                    const sData = await db.getOrCreateUser(guildId, authorData.spouse);
+                if (i.customId.startsWith('btn_spouse_')) {
+                    const tid = i.customId.split('_')[2];
+                    const targetData = await db.getOrCreateUser(guildId, tid);
+                    if (!targetData.spouse) return i.reply({ content: "Pas de conjoint.", flags: MessageFlags.Ephemeral });
+                    const sData = await db.getOrCreateUser(guildId, targetData.spouse);
                     if (!sData.familyName) return i.reply({ content: "Pas de nom de famille.", flags: MessageFlags.Ephemeral });
                     
-                    // Quitter l'ancienne famille proprement avant de rejoindre
-                    await db.clearUserFamilyLinksDB(guildId, authorId);
-                    await db.updateUser(guildId, authorId, { familyName: sData.familyName });
+                    await db.clearUserFamilyLinksDB(guildId, tid);
+                    await db.updateUser(guildId, tid, { familyName: sData.familyName });
                     const targetFam = await db.getFamily(guildId, sData.familyName);
-                    if (targetFam && !targetFam.members.includes(authorId)) {
-                        targetFam.members.push(authorId);
+                    if (targetFam && !targetFam.members.includes(tid)) {
+                        targetFam.members.push(tid);
                         await db.updateFamily(guildId, sData.familyName, { members: targetFam.members });
                     }
                     return i.update({ content: "💍 Nom adopté !", components: [] }); // La réponse est persistante
@@ -2039,10 +2186,11 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
-    if (interaction.customId === 'modal_bio') {
+    if (interaction.customId.startsWith('modal_bio')) {
         try {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-            await db.updateUser(guildId, interaction.user.id, { bio: interaction.fields.getTextInputValue('bio_text') });
+            const targetId = interaction.customId.split('_')[2] || interaction.user.id;
+            await db.updateUser(guildId, targetId, { bio: interaction.fields.getTextInputValue('bio_text') });
             await interaction.editReply({ content: "✅ Bio mise à jour !" });
         } catch (err) {
             console.error("Erreur bio:", err);
@@ -2075,7 +2223,7 @@ client.on('interactionCreate', async (interaction) => {
         }
     }
 
-    if (interaction.customId === 'modal_rename_branch') {
+    if (interaction.customId.startsWith('modal_rename_branch')) {
         try {
             await interaction.deferReply({ flags: MessageFlags.Ephemeral });
             const newName = interaction.fields.getTextInputValue('new_name').toLowerCase().trim();
@@ -2083,12 +2231,13 @@ client.on('interactionCreate', async (interaction) => {
                 return interaction.editReply({ content: "❌ Nom déjà pris." });
             }
             
-            const uData = await db.getOrCreateUser(guildId, interaction.user.id);
+            const targetId = interaction.customId.split('_')[2] || interaction.user.id;
+            const uData = await db.getOrCreateUser(guildId, targetId);
             const oldName = uData.familyName;
             const family = oldName ? await db.getFamily(guildId, oldName) : null;
 
-            if (family?.head === interaction.user.id) {
-                await db.createFamily(guildId, newName, interaction.user.id);
+            if (family?.head === targetId) {
+                await db.createFamily(guildId, newName, targetId);
                 await db.updateFamily(guildId, newName, { members: family.members });
                 for (const mId of family.members) await db.updateUser(guildId, mId, { familyName: newName });
                 await db.deleteFamily(guildId, oldName);
@@ -2096,14 +2245,14 @@ client.on('interactionCreate', async (interaction) => {
                 await interaction.editReply({ content: `✅ Dynastie renommée : **${newName.toUpperCase()}** !` });
             } else {
                 if (oldName && family) {
-                    const remaining = family.members.filter(id => id !== interaction.user.id);
+                    const remaining = family.members.filter(id => id !== targetId);
                     if (remaining.length === 0) await db.deleteFamily(guildId, oldName);
                     else await db.updateFamily(guildId, oldName, { members: remaining });
                 }
-                await db.createFamily(guildId, newName, interaction.user.id);
-                await db.updateUser(guildId, interaction.user.id, { familyName: newName });
+                await db.createFamily(guildId, newName, targetId);
+                await db.updateUser(guildId, targetId, { familyName: newName });
                 await db.addFamilyLog(guildId, newName, `🏷️ Nouvelle branche fondée : ${newName.toUpperCase()} (issue de ${oldName.toUpperCase()}).`);
-                await propagateNameChange(guildId, interaction.user.id, oldName, newName);
+                await propagateNameChange(guildId, targetId, oldName, newName);
                 await interaction.editReply({ content: `✅ Branche **${newName.toUpperCase()}** fondée !` });
             }
         } catch (err) {
