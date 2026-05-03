@@ -1144,11 +1144,19 @@ client.on('messageCreate', async (message) => {
     const guildId = message.guild.id;
     const authorData = await db.getOrCreateUser(guildId, authorId);
     
-    // On définit les commandes dont on veut garder la trace (social et info)
-    // Seuls help, account, familytop et les interactions sociales restent affichés.
-    const persistentCommands = ['help', 'account', 'familytop', 'familyhistory', 'fh', 'ask', 'end', 'marry', 'divorce', 'love-calc', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold', 'listfamilies', 'admininfo'];
+    const allCommands = [
+        'adminfamily', 'familyhistory', 'fh', 'family', 'familytop', 'account', 
+        'help', 'ask', 'end', 'love-calc', 'marry', 'stop', 'resetdb', 
+        'listfamilies', 'admininfo', 'info', 'divorce', 'hug', 'kiss', 'pat', 
+        'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold'
+    ];
 
-    // Suppression automatique du message utilisateur si la commande n'est pas persistante
+    // Si la commande n'est pas valide, on arrête tout ici sans supprimer le message
+    if (!allCommands.includes(command)) return;
+
+    const persistentCommands = ['help', 'account', 'familytop', 'familyhistory', 'fh', 'ask', 'end', 'marry', 'divorce', 'love-calc', 'hug', 'kiss', 'pat', 'slap', 'poke', 'tickle', 'bite', 'dance', 'cuddle', 'highfive', 'handhold', 'listfamilies', 'admininfo', 'info'];
+
+    // Suppression automatique du message utilisateur si la commande est valide mais non persistante
     if (!persistentCommands.includes(command)) safeDelete(message);
 
     const target = message.mentions.users.first();
