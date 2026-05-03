@@ -161,13 +161,13 @@ async function sendFamilyDisplay(ctx, guildId, targetId, isGlobal = false) {
     const family = await db.getFamily(guildId, targetData.familyName);
     if (!family) return;
 
-    const [buffer, ext, membersWealth] = await Promise.all([
-        generateFamilyImage(client, guildId, targetId, isGlobal),
-        getExtendedFamily(guildId, targetId),
+    const ext = await getExtendedFamily(guildId, targetId);
+    const [buffer, membersWealth] = await Promise.all([
+        generateFamilyImage(client, guildId, targetId, isGlobal, ext),
         Promise.all((family.members || []).map(id => getUBUser(guildId, id)))
     ]);
 
-    const totalWealth = membersWealth.reduce((acc, res) => acc + (res ? res.cash : 0), 0);
+    const totalWealth = (membersWealth || []).reduce((acc, res) => acc + (res ? res.cash : 0), 0);
     const spouseText = targetData.spouse ? formatMention(targetData.spouse) : 'Célibataire';
     const parentsText = [targetData.father, targetData.mother].filter(p => !!p).map(formatMention).join(', ') || 'Inconnus';
     const childrenText = (targetData.children || []).map(formatMention).join(', ') || 'Aucun';
@@ -195,29 +195,32 @@ async function sendFamilyDisplay(ctx, guildId, targetId, isGlobal = false) {
 }
 
 // --- Visual Tree Generator ---
-async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
+async function generateFamilyImage(client, guildId, userId, isGlobal = false, extData = null) {
     console.log(`[DEBUG] Début génération image pour : ${userId}`);
-    const userData = await db.getOrCreateUser(guildId, userId); // Fetch user data from DB
+    const userData = await db.getOrCreateUser(guildId, userId);
     const family = userData.familyName ? await db.getFamily(guildId, userData.familyName) : null;
+    const ext = extData || await getExtendedFamily(guildId, userId);
 
-    let membersToDraw = (userData.children || []).filter(id => family ? family.members.includes(id) : true);
+    let childrenRow = (userData.children || []).filter(id => family ? family.members.includes(id) : true);
     let parentsToDraw = [userData.father, userData.mother].filter(p => !!p && (family ? family.members.includes(p) : true));
 
     let grandparentsData = [];
-    if (isGlobal) {
-        for (const pId of parentsToDraw) {
-            const pData = await db.getOrCreateUser(guildId, pId);
-            if (pData.father && (family ? family.members.includes(pData.father) : true)) {
-                grandparentsData.push({ id: pData.father, childId: pId, side: 'père' });
-            }
-            if (pData.mother && (family ? family.members.includes(pData.mother) : true)) {
-                grandparentsData.push({ id: pData.mother, childId: pId, side: 'mère' });
-            }
+    for (const pId of parentsToDraw) {
+        const pData = await db.getOrCreateUser(guildId, pId);
+        if (pData.father && (family ? family.members.includes(pData.father) : true)) {
+            grandparentsData.push({ id: pData.father, childId: pId, side: 'père' });
+        }
+        if (pData.mother && (family ? family.members.includes(pData.mother) : true)) {
+            grandparentsData.push({ id: pData.mother, childId: pId, side: 'mère' });
         }
     }
 
-    const canvasWidth = Math.max(800, membersToDraw.length * 210 + 100);
-    const hasGrandparents = isGlobal && grandparentsData.length > 0;
+    const siblings = isGlobal ? Array.from(ext.siblings) : [];
+    const unclesAunts = isGlobal ? Array.from(ext.unclesAunts) : [];
+    
+    const mainRowLength = 1 + (userData.spouse ? 1 : 0) + siblings.length;
+    const canvasWidth = Math.max(1000, Math.max(mainRowLength, childrenRow.length) * 220);
+    const hasGrandparents = grandparentsData.length > 0;
     const canvasHeight = hasGrandparents ? 700 : 550;
     const centerX = canvasWidth / 2;
 
@@ -234,7 +237,6 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
     ctx.fillStyle = '#1e2124';
     ctx.fillRect(0, 0, canvasWidth, canvasHeight);
 
-    // Fonction robuste pour dessiner un rectangle arrondi (fallback manuel)
     const fillRoundedRect = (x, y, width, height, radius, color) => {
         ctx.save();
         ctx.beginPath();
