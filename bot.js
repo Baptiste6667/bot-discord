@@ -284,6 +284,7 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
 
     const canvas = createCanvas(canvasWidth, canvasHeight);
     const ctx = canvas.getContext('2d');
+    const drawnNodes = new Set();
 
     // Fond
     ctx.fillStyle = '#1e2124';
@@ -309,6 +310,9 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
 
     const drawNode = async (id, x, y, roleText, color = '#7289da') => {
         if (!id) return;
+        if (drawnNodes.has(id)) return; // Sécurité : Ne pas dessiner le même membre deux fois
+        drawnNodes.add(id);
+
         console.log(`[DEBUG] Dessin du nœud ${id} (${roleText}) à x:${x}, y:${y}`);
         
         const user = client.users.cache.get(id) || (typeof id === 'string' ? await client.users.fetch(id).catch(() => null) : null);
@@ -745,17 +749,12 @@ async function executeLinkChange(guildId, id1, id2, role, action) { // No longer
     const d1 = await db.getOrCreateUser(guildId, id1);
     const d2 = await db.getOrCreateUser(guildId, id2);
 
-    // --- NETTOYAGE DES ANCIENS LIENS STRUCTURELS ---
-    // Pour éviter qu'un membre n'apparaisse à deux endroits (doublons), 
-    // on détache la cible (d2) de ses parents actuels avant de lui donner sa nouvelle place.
-    if (d2.father) {
-        const fData = await db.getOrCreateUser(guildId, d2.father);
-        await db.updateUser(guildId, d2.father, { children: (fData.children || []).filter(id => id !== id2) });
-    }
-    if (d2.mother) {
-        const mData = await db.getOrCreateUser(guildId, d2.mother);
-        await db.updateUser(guildId, d2.mother, { children: (mData.children || []).filter(id => id !== id2) });
-    }
+    // Helper pour nettoyer la liste des enfants chez l'ancien parent
+    const removeChildFromParent = async (pId, cId) => {
+        if (!pId) return;
+        const p = await db.getOrCreateUser(guildId, pId);
+        await db.updateUser(guildId, pId, { children: (p.children || []).filter(id => id !== cId) });
+    };
 
     // Préparation des objets de mise à jour avec nettoyage des liens directs entre d1 et d2
     let d1Update = { 
@@ -769,8 +768,8 @@ async function executeLinkChange(guildId, id1, id2, role, action) { // No longer
     let d2Update = { 
         customLinks: { ...(d2.customLinks || {}) },
         children: (d2.children || []).filter(id => id !== id1),
-        father: null, // Reset des parents structurels pour id2
-        mother: null,
+        father: d2.father === id1 ? null : d2.father,
+        mother: d2.mother === id1 ? null : d2.mother,
         spouse: d2.spouse === id1 ? null : d2.spouse,
         couple: d2.couple === id1 ? null : d2.couple
     };
@@ -778,17 +777,33 @@ async function executeLinkChange(guildId, id1, id2, role, action) { // No longer
     delete d1Update.customLinks[id2];
     delete d2Update.customLinks[id1];
 
+    // Mise à jour automatique du genre et rôle final
+    const impliedGender = GENDER_ROLES[role.toLowerCase()];
+    if (impliedGender) d2Update.gender = impliedGender;
+    const actualRole = getGenderedRole(role, d2Update.gender || d2.gender);
+
+    // Nettoyage structural approfondi pour éviter les doublons sur l'arbre
+    if (actualRole === 'père') {
+        await removeChildFromParent(d1.father, id1);
+        d1Update.father = null;
+    } else if (actualRole === 'mère') {
+        await removeChildFromParent(d1.mother, id1);
+        d1Update.mother = null;
+    } else if (actualRole === 'enfant') {
+        const slot = (d1.gender === 'féminin') ? 'mother' : 'father';
+        await removeChildFromParent(d2[slot], id2);
+        d2Update[slot] = null;
+    } else if (['mari', 'femme', 'conjoint'].includes(actualRole)) {
+        if (d1.spouse) await db.updateUser(guildId, d1.spouse, { spouse: null });
+        if (d2.spouse) await db.updateUser(guildId, d2.spouse, { spouse: null });
+        d1Update.spouse = null; d2Update.spouse = null;
+    }
+
     if (action === 'remove') {
         await db.updateUser(guildId, id1, d1Update);
         await db.updateUser(guildId, id2, d2Update);
         return;
     }
-
-    // Mise à jour automatique du genre de la cible si le rôle est sexué
-    const impliedGender = GENDER_ROLES[role.toLowerCase()];
-    if (impliedGender) d2Update.gender = impliedGender;
-
-    const actualRole = getGenderedRole(role, d2Update.gender || d2.gender);
 
     switch (actualRole) {
         case 'conjoint': case 'mari': case 'femme':
@@ -811,6 +826,10 @@ async function executeLinkChange(guildId, id1, id2, role, action) { // No longer
             if (!cUpd.father || cUpd.father === pId) cUpd.father = pId;
             else cUpd.mother = pId;
             if (!pUpd.children.includes(cId)) pUpd.children.push(cId);
+
+            // Sauvegarde intermédiaire pour que l'auto-liaison voit les nouveaux parents
+            await db.updateUser(guildId, id1, d1Update);
+            await db.updateUser(guildId, id2, d2Update);
 
             // Auto-liaison aux grands-parents
             const extGP = await getExtendedFamily(guildId, cId);
