@@ -423,12 +423,11 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
 
     // Lignes vers les Oncles/Tantes (unclesAuntsData)
     unclesAuntsData.forEach((ua, i) => {
-        let gpX;
+        let gpX, xPos;
         if (ua.parentId) {
-            // Trouver la position X du grand-parent (parent de l'oncle/tante)
             const gp = grandparentsData.find(g => g.id === ua.parentId);
             if (gp) {
-                let parentOfX; // Position du parent du grand-parent (c'est-à-dire le parent de l'utilisateur/conjoint)
+                let parentOfX;
                 if (inviterParents.includes(gp.childId)) {
                     const pIdx = inviterParents.indexOf(gp.childId);
                     parentOfX = centerX + (pIdx === 0 ? -110 : 110);
@@ -436,32 +435,44 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
                     const pIdx = spouseParents.indexOf(gp.childId);
                     parentOfX = spouseX + (pIdx === 0 ? -110 : 110);
                 } else {
-                    parentOfX = centerX; // Fallback
+                    parentOfX = centerX;
                 }
-                gpX = parentOfX + (gp.side === 'père' ? -50 : 50); // Position du grand-parent
+                xPos = parentOfX + (gp.side === 'père' ? -60 : 60) + (i % 2 === 0 ? -120 : 120);
+                xPos = gpX + (i % 2 === 0 ? -120 : 120);
             } else {
-                gpX = centerX; // Fallback si grand-parent non trouvé
+                gpX = centerX;
+                xPos = centerX + (i % 2 === 0 ? -450 - (Math.floor(i/2)*50) : 450 + (Math.floor(i/2)*50));
             }
         } else {
-            gpX = centerX; // Fallback si pas de grand-parent connu
+            gpX = centerX;
+            xPos = centerX + (i % 2 === 0 ? -450 - (Math.floor(i/2)*50) : 450 + (Math.floor(i/2)*50));
         }
-        const xPos = centerX + (i % 2 === 0 ? -450 - (Math.floor(i/2)*20) : 450 + (Math.floor(i/2)*20)); // Position flottante
-        ctx.beginPath(); ctx.moveTo(gpX, grandparentY + 35); ctx.lineTo(xPos, parentY - 35); ctx.stroke(); // Ligne du grand-parent à l'oncle/tante
+        ctx.beginPath(); ctx.moveTo(gpX, grandparentY + 35); ctx.lineTo(xPos, parentY - 35); ctx.stroke();
     });
 
     if (hasGrandparents) {
-        const drawnGPs = new Set();
         for (const gp of grandparentsData) {
-            if (drawnGPs.has(gp.id)) continue; // Évite de dessiner le même grand-parent deux fois
-            drawnGPs.add(gp.id);
-            
-            const parentIdx = parentsToDraw.indexOf(gp.childId);
-            let parentX;
-            if (parentIdx !== -1) {
-                parentX = centerX - 100 + (parentIdx * 200);
+            let gpX, parentX;
+            if (gp.childId) { 
+                if (inviterParents.includes(gp.childId)) {
+                    const pIdx = inviterParents.indexOf(gp.childId);
+                    parentX = centerX + (pIdx === 0 ? -110 : 110);
+                } else if (spouseParents.includes(gp.childId)) {
+                    const pIdx = spouseParents.indexOf(gp.childId);
+                    parentX = spouseX + (pIdx === 0 ? -110 : 110);
+                } else {
+                    parentX = centerX;
+                }
+                gpX = parentX + (gp.side === 'père' ? -60 : 60);
             } else {
                 parentX = centerX;
+                gpX = centerX + (grandparentsData.indexOf(gp) % 2 === 0 ? -150 : 150);
             }
+
+            ctx.beginPath();
+            ctx.moveTo(parentX, parentY - 35);
+            ctx.lineTo(gpX, grandparentY + 35);
+            ctx.stroke();
         }
     }
 
@@ -552,8 +563,11 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
     }
 
     if (hasGrandparents) {
+        const drawnGPsNodes = new Set();
         for (const gp of grandparentsData) {
-            const parentIdx = parentsToDraw.indexOf(gp.childId);
+            if (drawnGPsNodes.has(gp.id)) continue;
+            drawnGPsNodes.add(gp.id);
+
             let gpX;
             if (parentIdx !== -1) {
                 const parentX = centerX - 100 + (parentIdx * 200);
