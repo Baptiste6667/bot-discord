@@ -96,8 +96,11 @@ const getGif = (action) => {
 
 /** --- BIBLIOTHÈQUE DE GIFS --- **/
 const GIF_LIBRARY = {
-    marry_accept: ['https://i.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHYzeXN6bmN6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/m9SULzJXS6lRhRmB4o/giphy.gif'],
-    marry_decline: ['https://media.giphy.com/media/7T33BLlB7NQrjozoRB/giphy.gif'],
+    marry_accept: ['https://i.giphy.com/media/v1.Y2lkPTc5MGI3NjExNHYzeXN6bmN6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/m9SULzJXS6lRhRmB4o/giphy.gif',
+        'https://klipy.com/gifs/marriage-cat--k01KQQ25G60PRC4V9NWH0VYZ45E',
+        'https://klipy.com/gifs/just-married-nibbles-1--k01KQQ28YQ5N1C0Q0YXGTHHKKJX'
+    ],
+    marry_decline: ['https://media.giphy.com/media/7T33BLlB7NQrjozoRB/giphy.gif', 'https://klipy.com/gifs/news-what--k01KQQ2GVV81DCCT3ZK28YKQV88', 'https://klipy.com/gifs/pickachu-cute--k01KQQ2CN4K87CE47HG6P20BP19'],
     ask_accept: ['https://media.giphy.com/media/v1.Y2lkPTc5MGI3NjExOHpueG8ycWV6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6ZWZ6NXFpZWhqbjF6JmVwPXYxX2ludGVybmFsX2dpZl9ieV9pZCZjdD1n/6YfMIn9680i9G/giphy.gif'],
     ask_decline: ['https://media.giphy.com/media/7T33BLlB7NQrjozoRB/giphy.gif'],
     end_rel: ['https://media.giphy.com/media/7T33BLlB7NQrjozoRB/giphy.gif'],
