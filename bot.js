@@ -46,6 +46,16 @@ require('dotenv').config();
 
 const PREFIX = process.env.PREFIX || ',';
 
+// Mapping pour la mise à jour automatique du genre selon le rôle
+const GENDER_ROLES = {
+    'père': 'masculin', 'mère': 'féminin',
+    'mari': 'masculin', 'femme': 'féminin',
+    'frère': 'masculin', 'soeur': 'féminin',
+    'oncle': 'masculin', 'tante': 'féminin',
+    'cousin': 'masculin', 'cousine': 'féminin',
+    'grand-père': 'masculin', 'grand-mère': 'féminin'
+};
+
 const ROLES_LIST = [
     'père', 'mère', 'enfant', 'frère', 'soeur', 
     'oncle', 'tante', 'cousin', 'cousine',
@@ -440,7 +450,11 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
     });
 
     if (hasGrandparents) {
+        const drawnGPs = new Set();
         for (const gp of grandparentsData) {
+            if (drawnGPs.has(gp.id)) continue; // Évite de dessiner le même grand-parent deux fois
+            drawnGPs.add(gp.id);
+            
             const parentIdx = parentsToDraw.indexOf(gp.childId);
             let parentX;
             if (parentIdx !== -1) {
@@ -502,7 +516,7 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
         const xPos = centerX + (i === 0 ? -110 : 110);
         const pData = await db.getOrCreateUser(guildId, inviterParents[i]);
         const pLabel = pData.gender === 'féminin' ? 'Mère' : (pData.gender === 'masculin' ? 'Père' : 'Parent');
-        await drawNode(parentsToDraw[i], xPos, parentY, pLabel);
+        await drawNode(inviterParents[i], xPos, parentY, pLabel);
     }
 
     // Dessin de la Fratrie (Vue Globale)
@@ -734,7 +748,11 @@ async function executeLinkChange(guildId, id1, id2, role, action) { // No longer
         return;
     }
 
-    const actualRole = getGenderedRole(role, d2.gender);
+    // Mise à jour automatique du genre de la cible si le rôle est sexué
+    const impliedGender = GENDER_ROLES[role.toLowerCase()];
+    if (impliedGender) d2Update.gender = impliedGender;
+
+    const actualRole = getGenderedRole(role, d2Update.gender || d2.gender);
 
     switch (actualRole) {
         case 'conjoint': case 'mari': case 'femme':
