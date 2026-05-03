@@ -43,7 +43,8 @@ async function getOrCreateUser(guildId, userId) {
     previousFamily: null,
     couple: null,
     bio: "",
-    gender: null
+    gender: null,
+    nickname: null
   };
 
   let user = await usersCollection.findOne({ _id: compositeId });

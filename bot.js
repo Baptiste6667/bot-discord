@@ -183,7 +183,7 @@ async function sendFamilyDisplay(ctx, guildId, targetId, isGlobal = false) {
             { name: '💰 Fortune Totale', value: `**${totalWealth.toLocaleString()}** cr.`, inline: true },
             { name: '📅 Création', value: family.createdAt ? new Date(family.createdAt).toLocaleDateString('fr-FR') : 'Inconnue', inline: true },
             { name: '💍 Union', value: spouseText, inline: true },
-            { name: '👨‍👩‍👧 Lignée Directe (Vue Relative)', value: `**Parents:** ${parentsText}\n**Enfants:** ${childrenText}`, inline: false },
+            { name: '👨‍👩‍👧 Lignée Directe (Vue Relative)', value: `**Nom:** ${targetData.nickname || 'Aucun'}\n**Parents:** ${parentsText}\n**Enfants:** ${childrenText}`, inline: false },
             { name: '🌳 Parenté Étendue', value: `**Fratrie:** ${Array.from(ext.siblings).map(formatMention).join(', ') || 'Aucun'} | **Grands-Parents:** ${Array.from(ext.grandparents).map(formatMention).join(', ') || 'Aucun'} | **Oncles/Tantes:** ${Array.from(ext.unclesAunts).map(formatMention).join(', ') || 'Aucun'} | **Cousins:** ${Array.from(ext.cousins).map(formatMention).join(', ') || 'Aucun'}`, inline: false }
         ).setTimestamp();
 
@@ -200,12 +200,11 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
     const userData = await db.getOrCreateUser(guildId, userId); // Fetch user data from DB
     const family = userData.familyName ? await db.getFamily(guildId, userData.familyName) : null;
 
-    // Calcul dynamique de la largeur en fonction du nombre d'enfants (220px par enfant)
-    let membersToDraw = (userData.children || []);
-    if (isGlobal && family && family.head === userId) {
-        // En mode global sur le chef, on dessine les membres de la famille qui ont leur propre branche
-        membersToDraw = family.members.filter(mId => mId !== userId);
-    }
+    // Filtrage intelligent : on ne dessine en bas QUE les enfants de la personne ciblée
+    // pour éviter que les grands-parents ne s'affichent dans la rangée des enfants.
+    let membersToDraw = (userData.children || []).filter(id => family ? family.members.includes(id) : true);
+    let parentsToDraw = [userData.father, userData.mother].filter(p => !!p && (family ? family.members.includes(p) : true));
+
     const canvasWidth = Math.max(800, membersToDraw.length * 210 + 100);
     const canvasHeight = 550;
     const centerX = canvasWidth / 2;
@@ -244,7 +243,8 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
         const user = client.users.cache.get(id) || (typeof id === 'string' ? await client.users.fetch(id).catch(() => null) : null);
         const dbUser = await db.getOrCreateUser(guildId, id);
         const genderedRole = getGenderedRole(roleText, dbUser.gender);
-        const name = (user ? user.username : id)?.toString() || "Inconnu";
+        // Priorité au surnom défini dans ,info
+        const name = dbUser.nickname || (user ? user.username : id)?.toString() || "Inconnu";
         const isHead = family?.head === id;
         const famName = dbUser.familyName ? dbUser.familyName.split('-famille')[0].toUpperCase() : "SANS NOM";
 
@@ -319,8 +319,7 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
         ctx.beginPath(); ctx.moveTo(centerX + 90, centerY); ctx.lineTo(centerX + 110, centerY); ctx.stroke();
     }
     
-    const parents = [userData.father, userData.mother].filter(p => !!p);
-    for (let i = 0; i < parents.length; i++) {
+    for (let i = 0; i < parentsToDraw.length; i++) {
         const xPos = centerX - 130 + (i * 260);
         ctx.beginPath(); ctx.moveTo(centerX, centerY - 35); ctx.lineTo(xPos, 130 + 35); ctx.stroke();
     }
@@ -371,11 +370,11 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
     // ÉTAPE 2 : Dessiner tous les nœuds par-dessus
     console.log("[DEBUG] Dessin des membres...");
     if (userData.spouse) await drawNode(userData.spouse, centerX + 200, centerY, "Conjoint(e)");
-    for (let i = 0; i < parents.length; i++) {
+    for (let i = 0; i < parentsToDraw.length; i++) {
         const xPos = centerX - 130 + (i * 260);
-        const pData = await db.getOrCreateUser(guildId, parents[i]);
+        const pData = await db.getOrCreateUser(guildId, parentsToDraw[i]);
         const pLabel = pData.gender === 'féminin' ? 'Mère' : (pData.gender === 'masculin' ? 'Père' : 'Parent');
-        await drawNode(parents[i], xPos, 130, pLabel);
+        await drawNode(parentsToDraw[i], xPos, 130, pLabel);
     }
     for (let i = 0; i < membersToDraw.length; i++) {
         await drawNode(membersToDraw[i], childrenPos[i], 430, isGlobal ? "Branche" : "Enfant");
@@ -1881,6 +1880,7 @@ client.on('messageCreate', async (message) => {
                     .setColor('#3498db')
                     .addFields(
                         { name: '🏷️ Nom de Famille', value: userData.familyName ? userData.familyName.toUpperCase() : 'Aucun', inline: true },
+                        { name: '📛 Nom Affiché', value: userData.nickname || '*Non défini (Pseudo par défaut)*', inline: true },
                         { name: '🎭 Rang', value: family?.head === targetUser.id ? "Chef" : (userData.familyName ? "Membre" : "Aucun"), inline: true },
                         { name: '👤 Genre', value: userData.gender || 'Non défini', inline: true },
                         { name: '📝 Bio', value: userData.bio || 'Aucune bio définie.', inline: false },
@@ -1913,7 +1913,8 @@ client.on('messageCreate', async (message) => {
                     const tid = i.customId.split('_')[2];
                     const editRow1 = new ActionRowBuilder().addComponents(
                         new ButtonBuilder().setCustomId(`btn_bio_${tid}`).setLabel('Bio').setStyle(ButtonStyle.Secondary).setEmoji('📝'),
-                        new ButtonBuilder().setCustomId(`btn_gender_${tid}`).setLabel('Genre').setStyle(ButtonStyle.Secondary).setEmoji('👤')
+                        new ButtonBuilder().setCustomId(`btn_gender_${tid}`).setLabel('Genre').setStyle(ButtonStyle.Secondary).setEmoji('👤'),
+                        new ButtonBuilder().setCustomId(`btn_nickname_${tid}`).setLabel('Nom Arbre').setStyle(ButtonStyle.Primary).setEmoji('📛')
                     );
                     const editRow2 = new ActionRowBuilder().addComponents(
                         new ButtonBuilder().setCustomId(`btn_name_${tid}`).setLabel('Renommer Branche').setStyle(ButtonStyle.Secondary).setEmoji('🏷️'),
@@ -1928,6 +1929,12 @@ client.on('messageCreate', async (message) => {
                     const tid = i.customId.split('_')[2];
                     const modal = new ModalBuilder().setCustomId(`modal_bio_${tid}`).setTitle('Modifier la Bio');
                     modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('bio_text').setLabel("Description").setStyle(TextInputStyle.Paragraph).setRequired(true)));
+                    return i.showModal(modal);
+                }
+                if (i.customId.startsWith('btn_nickname_')) {
+                    const tid = i.customId.split('_')[2];
+                    const modal = new ModalBuilder().setCustomId(`modal_nickname_${tid}`).setTitle('Nom sur l\'arbre');
+                    modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('nick_text').setLabel("Surnom (max 12 car.)").setStyle(TextInputStyle.Short).setMaxLength(12).setRequired(true)));
                     return i.showModal(modal);
                 }
                 if (i.customId.startsWith('btn_gender_')) {
@@ -2201,6 +2208,18 @@ client.on('interactionCreate', async (interaction) => {
         } catch (err) {
             console.error("Erreur bio:", err);
             if (interaction.deferred) await interaction.editReply({ content: "❌ Impossible de mettre à jour la bio." });
+        }
+    }
+
+    if (interaction.customId.startsWith('modal_nickname')) {
+        try {
+            await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+            const targetId = interaction.customId.split('_')[2] || interaction.user.id;
+            await db.updateUser(guildId, targetId, { nickname: interaction.fields.getTextInputValue('nick_text') });
+            await interaction.editReply({ content: "✅ Nom d'affichage mis à jour sur l'arbre !" });
+        } catch (err) {
+            console.error("Erreur nickname:", err);
+            if (interaction.deferred) await interaction.editReply({ content: "❌ Erreur lors de la mise à jour du nom." });
         }
     }
 
