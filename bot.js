@@ -493,6 +493,17 @@ async function getExtendedFamily(guildId, userId) {
         }
     }
 
+    // Scan des liens personnalisés pour compléter la parenté étendue si les liens structurels manquent
+    if (user.customLinks) {
+        for (const [targetId, role] of Object.entries(user.customLinks)) {
+            const r = role.toLowerCase();
+            if (r.includes('frère') || r.includes('soeur')) siblings.add(targetId);
+            else if (r.includes('grand-père') || r.includes('grand-mère') || r.includes('grand-parent')) grandparents.add(targetId);
+            else if (r.includes('oncle') || r.includes('tante')) unclesAunts.add(targetId);
+            else if (r.includes('cousin')) cousins.add(targetId);
+        }
+    }
+
     return { siblings, grandparents, unclesAunts, cousins };
 }
 
@@ -640,9 +651,52 @@ async function executeLinkChange(guildId, id1, id2, role, action) { // No longer
         // On remplit le premier slot libre chez l'enfant
         if (!d2.father || d2.father === id1) d2Update.father = id1;
         else d2Update.mother = id1;
+    } else if (actualRole === 'frère' || actualRole === 'soeur') {
+        const parents = [d1.father, d1.mother].filter(p => !!p);
+        if (parents.length > 0) {
+            d2Update.father = d1.father;
+            d2Update.mother = d1.mother;
+            for (const pId of parents) {
+                const pData = await db.getOrCreateUser(guildId, pId);
+                if (!pData.children.includes(id2)) {
+                    await db.updateUser(guildId, pId, { children: [...pData.children, id2] });
+                }
+            }
+        }
+        d1Update.customLinks[id2] = actualRole;
+        d2Update.customLinks[id1] = await getReverseRole(actualRole, d1);
+    } else if (actualRole === 'grand-père' || actualRole === 'grand-mère') {
+        const parents = [d1.father, d1.mother].filter(p => !!p);
+        if (parents.length > 0) {
+            const parentId = parents[Math.floor(Math.random() * parents.length)];
+            const field = (actualRole === 'grand-père') ? 'father' : 'mother';
+            await db.updateUser(guildId, parentId, { [field]: id2 });
+            if (!(d2.children || []).includes(parentId)) d2Update.children = [...(d2.children || []), parentId];
+        }
+        d1Update.customLinks[id2] = actualRole;
+        d2Update.customLinks[id1] = await getReverseRole(actualRole, d1);
+    } else if (actualRole === 'oncle' || actualRole === 'tante') {
+        const parents = [d1.father, d1.mother].filter(p => !!p);
+        if (parents.length > 0) {
+            const parentId = parents[Math.floor(Math.random() * parents.length)];
+            const pData = await db.getOrCreateUser(guildId, parentId);
+            if (pData.father || pData.mother) {
+                d2Update.father = pData.father;
+                d2Update.mother = pData.mother;
+                const gps = [pData.father, pData.mother].filter(g => !!g);
+                for (const gpId of gps) {
+                    const gpData = await db.getOrCreateUser(guildId, gpId);
+                    if (!gpData.children.includes(id2)) {
+                        await db.updateUser(guildId, gpId, { children: [...gpData.children, id2] });
+                    }
+                }
+            }
+        }
+        d1Update.customLinks[id2] = actualRole;
+        d2Update.customLinks[id1] = await getReverseRole(actualRole, d1);
     } else {
-        d1Update.customLinks = { ...(d1Update.customLinks || d1.customLinks), [id2]: actualRole };
-        d2Update.customLinks = { ...(d2Update.customLinks || d2.customLinks), [id1]: await getReverseRole(actualRole, d1) };
+        d1Update.customLinks[id2] = actualRole;
+        d2Update.customLinks[id1] = await getReverseRole(actualRole, d1);
     }
 
     await db.updateUser(guildId, id1, d1Update);
