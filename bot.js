@@ -257,11 +257,11 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false, ex
     const mainRowLength = 1 + (userData.spouse ? 1 : 0) + siblingsData.length + cousinsData.length;
     const canvasWidth = Math.max(1000, Math.max(mainRowLength, childrenRow.length) * 220);
     const hasGrandparents = grandparentsData.length > 0;
-    const canvasHeight = hasGrandparents ? 700 : 550;
+    const canvasHeight = hasGrandparents ? 800 : 600;
     const centerX = canvasWidth / 2;
 
     const offsetY = hasGrandparents ? 150 : 0;
-    const grandparentY = 80;
+    const grandparentY = 130;
     const parentY = 130 + offsetY;
     const centerY = 280 + offsetY;
     const childY = 430 + offsetY;
