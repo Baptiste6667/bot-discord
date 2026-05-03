@@ -720,7 +720,19 @@ async function executeLinkChange(guildId, id1, id2, role, action) { // No longer
     const d1 = await db.getOrCreateUser(guildId, id1);
     const d2 = await db.getOrCreateUser(guildId, id2);
 
-    // Préparation des objets de mise à jour avec les données existantes
+    // --- NETTOYAGE DES ANCIENS LIENS STRUCTURELS ---
+    // Pour éviter qu'un membre n'apparaisse à deux endroits (doublons), 
+    // on détache la cible (d2) de ses parents actuels avant de lui donner sa nouvelle place.
+    if (d2.father) {
+        const fData = await db.getOrCreateUser(guildId, d2.father);
+        await db.updateUser(guildId, d2.father, { children: (fData.children || []).filter(id => id !== id2) });
+    }
+    if (d2.mother) {
+        const mData = await db.getOrCreateUser(guildId, d2.mother);
+        await db.updateUser(guildId, d2.mother, { children: (mData.children || []).filter(id => id !== id2) });
+    }
+
+    // Préparation des objets de mise à jour avec nettoyage des liens directs entre d1 et d2
     let d1Update = { 
         customLinks: { ...(d1.customLinks || {}) },
         children: (d1.children || []).filter(id => id !== id2),
@@ -732,13 +744,12 @@ async function executeLinkChange(guildId, id1, id2, role, action) { // No longer
     let d2Update = { 
         customLinks: { ...(d2.customLinks || {}) },
         children: (d2.children || []).filter(id => id !== id1),
-        father: d2.father === id1 ? null : d2.father,
-        mother: d2.mother === id1 ? null : d2.mother,
+        father: null, // Reset des parents structurels pour id2
+        mother: null,
         spouse: d2.spouse === id1 ? null : d2.spouse,
         couple: d2.couple === id1 ? null : d2.couple
     };
 
-    // Nettoyage des customLinks si présents
     delete d1Update.customLinks[id2];
     delete d2Update.customLinks[id1];
 
