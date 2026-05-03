@@ -161,9 +161,9 @@ async function sendFamilyDisplay(ctx, guildId, targetId, isGlobal = false) {
     const family = await db.getFamily(guildId, targetData.familyName);
     if (!family) return;
 
+    const ext = await getExtendedFamily(guildId, targetId);
     const [buffer, ext, membersWealth] = await Promise.all([
-        generateFamilyImage(client, guildId, targetId, isGlobal),
-        getExtendedFamily(guildId, targetId),
+        generateFamilyImage(client, guildId, targetId, isGlobal, ext),
         Promise.all((family.members || []).map(id => getUBUser(guildId, id)))
     ]);
 
@@ -200,15 +200,32 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
     const userData = await db.getOrCreateUser(guildId, userId); // Fetch user data from DB
     const family = userData.familyName ? await db.getFamily(guildId, userData.familyName) : null;
 
-    // Filtrage intelligent : on ne dessine en bas QUE les enfants de la personne ciblée
-    // pour éviter que les grands-parents ne s'affichent dans la rangée des enfants.
     let membersToDraw = (userData.children || []).filter(id => family ? family.members.includes(id) : true);
     let parentsToDraw = [userData.father, userData.mother].filter(p => !!p && (family ? family.members.includes(p) : true));
 
+    let grandparentsData = [];
+    if (isGlobal) {
+        for (const pId of parentsToDraw) {
+            const pData = await db.getOrCreateUser(guildId, pId);
+            if (pData.father && (family ? family.members.includes(pData.father) : true)) {
+                grandparentsData.push({ id: pData.father, childId: pId, side: 'père' });
+            }
+            if (pData.mother && (family ? family.members.includes(pData.mother) : true)) {
+                grandparentsData.push({ id: pData.mother, childId: pId, side: 'mère' });
+            }
+        }
+    }
+
     const canvasWidth = Math.max(800, membersToDraw.length * 210 + 100);
-    const canvasHeight = 550;
+    const hasGrandparents = isGlobal && grandparentsData.length > 0;
+    const canvasHeight = hasGrandparents ? 700 : 550;
     const centerX = canvasWidth / 2;
-    const centerY = 280;
+
+    const offsetY = hasGrandparents ? 150 : 0;
+    const grandparentY = 80;
+    const parentY = 130 + offsetY;
+    const centerY = 280 + offsetY;
+    const childY = 430 + offsetY;
 
     const canvas = createCanvas(canvasWidth, canvasHeight);
     const ctx = canvas.getContext('2d');
@@ -319,17 +336,38 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
         ctx.beginPath(); ctx.moveTo(centerX + 90, centerY); ctx.lineTo(centerX + 110, centerY); ctx.stroke();
     }
     
-    for (let i = 0; i < parentsToDraw.length; i++) {
-        const xPos = centerX - 130 + (i * 260);
-        ctx.beginPath(); ctx.moveTo(centerX, centerY - 35); ctx.lineTo(xPos, 130 + 35); ctx.stroke();
+    // Lignes vers les parents
+    parentsToDraw.forEach((pId, i) => {
+        const xPos = centerX - 100 + (i * 200);
+        ctx.beginPath(); ctx.moveTo(centerX, centerY - 35); ctx.lineTo(xPos, parentY + 35); ctx.stroke();
+    });
+
+    // Lignes vers les frères et sœurs (Vue Globale)
+    siblings.forEach((sId, i) => {
+        const xPos = centerX + (i % 2 === 0 ? -220 * (Math.floor(i/2)+1) : 220 * (Math.floor(i/2)+1));
+        ctx.beginPath(); ctx.moveTo(centerX, centerY); ctx.lineTo(xPos + (i % 2 === 0 ? 95 : -95), centerY); ctx.stroke();
+    });
+
+    if (hasGrandparents) {
+        for (const gp of grandparentsData) {
+            const parentIdx = parentsToDraw.indexOf(gp.childId);
+            if (parentIdx === -1) continue;
+            const parentX = centerX - 100 + (parentIdx * 200);
+            const gpX = parentX + (gp.side === 'père' ? -60 : 60);
+            
+            ctx.beginPath();
+            ctx.moveTo(parentX, parentY - 35);
+            ctx.lineTo(gpX, grandparentY + 35);
+            ctx.stroke();
+        }
     }
 
     // ÉTAPE : Calcul des positions des enfants selon la parenté
     const childrenPos = [];
     const spouseId = userData.spouse;
 
-    for (let i = 0; i < membersToDraw.length; i++) {
-        const childId = membersToDraw[i];
+    for (let i = 0; i < childrenRow.length; i++) {
+        const childId = childrenRow[i];
         const childDb = await db.getOrCreateUser(guildId, childId);
         
         let targetBaseX = centerX; // Par défaut sous "Moi"
@@ -346,12 +384,12 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
         }
 
         // Spread local pour éviter les superpositions si plusieurs enfants ont le même parentage
-        const sameParentage = membersToDraw.filter((_, idx) => {
+        const sameParentage = childrenRow.filter((_, idx) => {
             // Logique simplifiée pour le spread : on décale légèrement si plusieurs enfants arrivent au même endroit
             return idx < i; 
         }).length;
         
-        const xPos = targetBaseX + (sameParentage * 20) - (membersToDraw.length > 5 ? 50 : 0);
+        const xPos = targetBaseX + (sameParentage * 20) - (childrenRow.length > 5 ? 50 : 0);
         childrenPos.push(xPos);
 
         // Dessin de la ligne vers l'enfant
@@ -362,7 +400,7 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
 
         ctx.beginPath(); 
         ctx.moveTo(lineStartX, centerY + 35); 
-        ctx.lineTo(xPos, 430 - 35); 
+        ctx.lineTo(xPos, childY - 35); 
         ctx.stroke();
     }
     ctx.restore();
@@ -370,14 +408,43 @@ async function generateFamilyImage(client, guildId, userId, isGlobal = false) {
     // ÉTAPE 2 : Dessiner tous les nœuds par-dessus
     console.log("[DEBUG] Dessin des membres...");
     if (userData.spouse) await drawNode(userData.spouse, centerX + 200, centerY, "Conjoint(e)");
+    
+    // Dessin des parents
     for (let i = 0; i < parentsToDraw.length; i++) {
-        const xPos = centerX - 130 + (i * 260);
+        const xPos = centerX - 100 + (i * 200);
         const pData = await db.getOrCreateUser(guildId, parentsToDraw[i]);
         const pLabel = pData.gender === 'féminin' ? 'Mère' : (pData.gender === 'masculin' ? 'Père' : 'Parent');
-        await drawNode(parentsToDraw[i], xPos, 130, pLabel);
+        await drawNode(parentsToDraw[i], xPos, parentY, pLabel);
     }
-    for (let i = 0; i < membersToDraw.length; i++) {
-        await drawNode(membersToDraw[i], childrenPos[i], 430, isGlobal ? "Branche" : "Enfant");
+
+    // Dessin des frères et sœurs (Vue Globale)
+    for (let i = 0; i < siblings.length; i++) {
+        const xPos = centerX + (i % 2 === 0 ? -220 * (Math.floor(i/2)+1) : 220 * (Math.floor(i/2)+1));
+        await drawNode(siblings[i], xPos, centerY, "Frère/Soeur", '#95a5a6');
+    }
+
+    // Dessin des Oncles et Tantes (Vue Globale)
+    for (let i = 0; i < unclesAunts.length; i++) {
+        const xPos = centerX + (i % 2 === 0 ? -450 : 450);
+        const uaDb = await db.getOrCreateUser(guildId, unclesAunts[i]);
+        const uaLabel = uaDb.gender === 'féminin' ? 'Tante' : (uaDb.gender === 'masculin' ? 'Oncle' : 'Oncle/Tante');
+        await drawNode(unclesAunts[i], xPos, parentY, uaLabel, '#9b59b6');
+    }
+
+    if (hasGrandparents) {
+        for (const gp of grandparentsData) {
+            const parentIdx = parentsToDraw.indexOf(gp.childId);
+            const parentX = centerX - 130 + (parentIdx * 260);
+            const gpX = parentX + (gp.side === 'père' ? -60 : 60);
+            
+            const gpDb = await db.getOrCreateUser(guildId, gp.id);
+            const gpLabel = gpDb.gender === 'féminin' ? 'Grand-mère' : (gpDb.gender === 'masculin' ? 'Grand-père' : 'Grand-parent');
+            await drawNode(gp.id, gpX, grandparentY, gpLabel);
+        }
+    }
+
+    for (let i = 0; i < childrenRow.length; i++) {
+        await drawNode(childrenRow[i], childrenPos[i], childY, isGlobal ? "Branche" : "Enfant");
     }
     
     await drawNode(userId, centerX, centerY, "Moi", '#5865F2');
