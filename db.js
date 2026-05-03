@@ -53,7 +53,7 @@ async function getOrCreateUser(guildId, userId) {
     user = { _id: compositeId, guildId, userId, ...defaults };
     await usersCollection.insertOne(user);
   } else {
-    // Protection contre les anciennes données : on fusionne avec les valeurs par défaut
+    // Si l'utilisateur existe, on fusionne ses données avec les valeurs par défaut pour s'assurer que tous les champs sont présents
     user = { ...defaults, ...user };
   }
   return user;
