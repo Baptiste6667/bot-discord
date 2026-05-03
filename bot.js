@@ -780,19 +780,30 @@ async function executeLinkChange(guildId, id1, id2, role, action) { // No longer
             const extGP = await getExtendedFamily(guildId, cId);
             if (extGP.grandparents.size > 0) {
                 const otherPId = cUpd.father === pId ? cData.mother : cData.father;
-                let otherPLinked = false;
-                if (otherPId) {
-                    const opD = await db.getOrCreateUser(guildId, otherPId);
-                    otherPLinked = Array.from(extGP.grandparents).some(gp => opD.father === gp || opD.mother === gp);
-                }
-                if (!otherPLinked) {
-                    for (const gpId of extGP.grandparents) {
-                        const gpD = await db.getOrCreateUser(guildId, gpId);
-                        const gpRel = (cData.customLinks && cData.customLinks[gpId])?.toLowerCase() || '';
-                        if (gpRel.includes('père') && !pUpd.father) pUpd.father = gpId;
-                        else if (gpRel.includes('mère') && !pUpd.mother) pUpd.mother = gpId;
-                        if (!(gpD.children || []).includes(pId)) {
-                            await db.updateUser(guildId, gpId, { children: [...(gpD.children || []), pId] });
+                for (const gpId of extGP.grandparents) {
+                    const gpD = await db.getOrCreateUser(guildId, gpId);
+                    const gpRel = (cData.customLinks && cData.customLinks[gpId])?.toLowerCase() || '';
+
+                    // On vérifie si l'autre parent est déjà l'enfant de CE grand-parent spécifique
+                    let alreadyLinkedToOther = false;
+                    if (otherPId) {
+                        const opD = await db.getOrCreateUser(guildId, otherPId);
+                        if (opD.father === gpId || opD.mother === gpId) alreadyLinkedToOther = true;
+                    }
+
+                    if (!alreadyLinkedToOther) {
+                        let linked = false;
+                        // Déterminer si c'est le père ou la mère du nouveau parent
+                        if (gpRel.includes('père') && !pUpd.father) { pUpd.father = gpId; linked = true; }
+                        else if (gpRel.includes('mère') && !pUpd.mother) { pUpd.mother = gpId; linked = true; }
+                        
+                        if (linked) {
+                            // On transforme le lien custom en lien structurel (nettoyage)
+                            delete cUpd.customLinks[gpId];
+                            // Mise à jour réciproque chez le grand-parent
+                            if (!(gpD.children || []).includes(pId)) {
+                                await db.updateUser(guildId, gpId, { children: [...(gpD.children || []), pId] });
+                            }
                         }
                     }
                 }
