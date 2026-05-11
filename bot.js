@@ -20,8 +20,18 @@ const {
     TextInputStyle,
     MessageFlags
 } = require('discord.js');
-const { createCanvas, loadImage } = require('canvas');
+// NOTE: 'canvas' (node-canvas) peut ne pas être installé sur certains hébergeurs (ex: Render).
+// On le charge de façon optionnelle afin d'éviter un crash complet du bot.
+let createCanvas = null;
+let loadImage = null;
+try {
+    ({ createCanvas, loadImage } = require('canvas'));
+} catch (e) {
+    console.warn(`[WARN] La dépendance 'canvas' est introuvable. La commande family (génération d'image) sera désactivée.`);
+}
+
 const axios = require('axios');
+
 
 require('dotenv').config();
 
@@ -75,7 +85,12 @@ async function updateUBBalance(guildId, userId, cashDelta) {
 
 // --- Visual Tree Generator ---
 async function generateFamilyImage(client, userId) {
+    if (!createCanvas || !loadImage) {
+        return null; // fallback: pas d'image si canvas indisponible
+    }
     const canvas = createCanvas(800, 450); // Canvas size
+
+
     const ctx = canvas.getContext('2d');
     const userData = await db.getOrCreateUser(userId); // Fetch user data from DB
     
@@ -373,14 +388,20 @@ async function executeLinkChange(id1, id2, role, action) { // No longer needs `d
     if (d1.spouse === id2) d1Update.spouse = null;
     if (d2.spouse === id1) d2Update.spouse = null;
 
-    // Parent/child links between these two users
-    if (d1.father === id2) d1Update.father = null;
-    if (d1.mother === id2) d1Update.mother = null;
-    if (d2.father === id1) d2Update.father = null;
-    if (d2.mother === id1) d2Update.mother = null;
+    // Parent/child links between these two users.
+    // Only clear these structural fields when the NEW role is actually a parent/child relation.
+    // Otherwise we preserve family links (as requested).
+    const nextIsStructural = ['conjoint', 'père', 'mère', 'enfant'].includes(role);
+    if (nextIsStructural) {
+        if (d1.father === id2) d1Update.father = null;
+        if (d1.mother === id2) d1Update.mother = null;
+        if (d2.father === id1) d2Update.father = null;
+        if (d2.mother === id1) d2Update.mother = null;
 
-    d1Update.children = d1Update.children.filter(cid => cid !== id2);
-    d2Update.children = d2Update.children.filter(cid => cid !== id1);
+        d1Update.children = d1Update.children.filter(cid => cid !== id2);
+        d2Update.children = d2Update.children.filter(cid => cid !== id1);
+    }
+
 
     // Remove customLinks between these two
     if (d1.customLinks && d1.customLinks[id2]) {

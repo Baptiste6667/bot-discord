@@ -1,21 +1,35 @@
 const { MongoClient, ServerApiVersion } = require('mongodb');
 
 const uri = process.env.MONGODB_URI;
-const client = new MongoClient(uri, {
-  serverApi: {
-    version: ServerApiVersion.v1,
-    strict: true,
-    deprecationErrors: true,
-  }
-});
+
+const client = uri
+  ? new MongoClient(uri, {
+      serverApi: {
+        version: ServerApiVersion.v1,
+        strict: true,
+        deprecationErrors: true,
+      },
+    })
+  : null;
+
+if (!uri) {
+  console.error("❌ MONGODB_URI manquant dans les variables d'environnement (.env)." );
+}
+
 
 let db;
 let usersCollection;
 let familiesCollection;
 
 async function connectDB() {
+  if (!client) {
+    console.error("❌ Impossible de démarrer : MONGODB_URI manquant.");
+    process.exit(1);
+  }
   try {
     await client.connect();
+
+
     db = client.db(); // Connects to the database specified in the URI (e.g., familyBotDB)
     usersCollection = db.collection('users');
     familiesCollection = db.collection('families');
