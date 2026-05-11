@@ -32,7 +32,6 @@ try {
 
 const axios = require('axios');
 
-
 require('dotenv').config();
 
 const PREFIX = process.env.PREFIX || ',';
@@ -388,20 +387,14 @@ async function executeLinkChange(id1, id2, role, action) { // No longer needs `d
     if (d1.spouse === id2) d1Update.spouse = null;
     if (d2.spouse === id1) d2Update.spouse = null;
 
-    // Parent/child links between these two users.
-    // Only clear these structural fields when the NEW role is actually a parent/child relation.
-    // Otherwise we preserve family links (as requested).
-    const nextIsStructural = ['conjoint', 'père', 'mère', 'enfant'].includes(role);
-    if (nextIsStructural) {
-        if (d1.father === id2) d1Update.father = null;
-        if (d1.mother === id2) d1Update.mother = null;
-        if (d2.father === id1) d2Update.father = null;
-        if (d2.mother === id1) d2Update.mother = null;
+    // Parent/child links between these two users
+    if (d1.father === id2) d1Update.father = null;
+    if (d1.mother === id2) d1Update.mother = null;
+    if (d2.father === id1) d2Update.father = null;
+    if (d2.mother === id1) d2Update.mother = null;
 
-        d1Update.children = d1Update.children.filter(cid => cid !== id2);
-        d2Update.children = d2Update.children.filter(cid => cid !== id1);
-    }
-
+    d1Update.children = d1Update.children.filter(cid => cid !== id2);
+    d2Update.children = d2Update.children.filter(cid => cid !== id1);
 
     // Remove customLinks between these two
     if (d1.customLinks && d1.customLinks[id2]) {
@@ -620,29 +613,45 @@ client.on('messageCreate', async (message) => {
                 .setDescription("Sélectionnez une action administrative.");
 
             const row = new ActionRowBuilder().addComponents(
-                new StringSelectMenuBuilder().setCustomId('admin_action').setPlaceholder('Action...')
-                    .addOptions([
-                        { label: 'Ajouter un membre', value: 'add' },
-                        { label: 'Modifier un membre', value: 'modify' },
-                        { label: 'Supprimer un membre', value: 'remove' },
-                        { label: 'Réinitialiser la famille', value: 'clear' },
-                        { label: 'Fermer', value: 'cancel' }
-                    ])
+                new ButtonBuilder().setCustomId('adm_add').setLabel('➕ Ajouter').setStyle(ButtonStyle.Primary),
+                new ButtonBuilder().setCustomId('adm_modify').setLabel('📝 Modifier').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('adm_remove').setLabel('❌ Retirer').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('adm_clear').setLabel('🗑️ Reset').setStyle(ButtonStyle.Danger),
+                new ButtonBuilder().setCustomId('adm_cancel').setLabel('Fermer').setStyle(ButtonStyle.Secondary)
+            );
+            const row2 = new ActionRowBuilder().addComponents(
+                new ButtonBuilder().setCustomId('adm_lineage').setLabel('🌳 Lignée').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('adm_full').setLabel('📜 Lignée Complète').setStyle(ButtonStyle.Secondary),
+                new ButtonBuilder().setCustomId('adm_hist').setLabel('📜 Historique').setStyle(ButtonStyle.Secondary)
             );
 
-            const msg = await message.reply({ embeds: [embed], components: [row] });
-            const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && i.customId === 'admin_action', time: 120000 });
+            const msg = await message.reply({ embeds: [embed], components: [row, row2] });
+            const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && i.customId.startsWith('adm_'), time: 120000 });
 
             coll.on('collect', async (i) => {
-                if (i.values[0] === 'cancel') return i.message.delete();
-                if (i.values[0] === 'clear') {
+                if (i.customId === 'adm_cancel') return i.message.delete();
+                if (i.customId === 'adm_clear') {
 for (const mId of family.members) await db.updateUser(mId, { familyName: null, spouse: null, children: [], mother: null, father: null, customLinks: {} });
                     await db.deleteFamily(familyName);
                     await i.message.delete();
                     return i.channel.send(`✅ Famille **${familyName.toUpperCase()}** supprimée.`);
                 }
 
-                const action = i.values[0];
+                const action = i.customId.replace('adm_', '');
+
+                if (action === 'lineage') {
+                    const buffer = await generateFamilyImage(client, family.head);
+                    return i.reply({ files: [new AttachmentBuilder(buffer, { name: 'family.png' })], flags: MessageFlags.Ephemeral });
+                }
+                if (action === 'full') {
+                    const membersStr = (await Promise.all(family.members.map(async mId => {
+                        const u = client.users.cache.get(mId) || await client.users.fetch(mId).catch(() => null);
+                        return u ? `• ${u.username}` : `• ${mId}`;
+                    }))).join('\n');
+                    return i.reply({ content: `📜 **Membres (${familyName.toUpperCase()}) :**\n${membersStr}`, flags: MessageFlags.Ephemeral });
+                }
+                if (action === 'hist') return i.reply({ content: "📜 L'historique sera disponible bientôt.", flags: MessageFlags.Ephemeral });
+
                 let targetSelectRow;
                 if (action === 'add') {
                     targetSelectRow = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('target').setPlaceholder('Choisir le membre à ajouter...'));
@@ -776,24 +785,31 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                 const isHead = family.head === authorId;
                 embed.setDescription(`Dynastie : **${authorData.familyName.toUpperCase()}**\nRang : ${isHead ? "Chef" : "Membre"}`);
                 
-                const menu = new StringSelectMenuBuilder().setCustomId('fam_action').setPlaceholder('Gérer...')
-                    .addOptions([
-                        { label: 'Ajouter un membre', value: 'add' },
-                        { label: 'Modifier un rôle', value: 'modify' },
-                        { label: 'Enlever un membre', value: 'remove' },
-                        { label: 'Quitter la famille', value: 'leave' }
-                    ]);
-                if (isHead) menu.addOptions({ label: 'Dissoudre la famille', value: 'delete' });
-                menu.addOptions({ label: 'Annuler', value: 'cancel' });
-                rows.push(new ActionRowBuilder().addComponents(menu));
-                rows.push(new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('cancel_main').setLabel('Fermer').setStyle(ButtonStyle.Secondary)));
+                rows.push(new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId('fam_add').setLabel('➕ Ajouter').setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder().setCustomId('fam_modify').setLabel('📝 Modifier').setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId('fam_remove').setLabel('❌ Retirer').setStyle(ButtonStyle.Danger)
+                ));
+                rows.push(new ActionRowBuilder().addComponents(
+                    new ButtonBuilder().setCustomId('fam_lineage').setLabel('🌳 Lignée').setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId('fam_full').setLabel('📜 Lignée Complète').setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder().setCustomId('fam_hist').setLabel('📜 Historique').setStyle(ButtonStyle.Secondary)
+                ));
+                const row3 = new ActionRowBuilder();
+                if (isHead) row3.addComponents(new ButtonBuilder().setCustomId('fam_transfer').setLabel('👑 Transférer').setStyle(ButtonStyle.Primary));
+                row3.addComponents(new ButtonBuilder().setCustomId('fam_leave').setLabel('👋 Quitter').setStyle(ButtonStyle.Danger));
+                if (isHead) {
+                    row3.addComponents(new ButtonBuilder().setCustomId('fam_delete').setLabel('🗑️ Dissoudre').setStyle(ButtonStyle.Danger));
+                }
+                row3.addComponents(new ButtonBuilder().setCustomId('fam_cancel').setLabel('Fermer').setStyle(ButtonStyle.Secondary));
+                rows.push(row3);
             }
 
             const msg = await message.reply({ embeds: [embed], components: rows });
-            const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && ['fam_action', 'create_fam', 'cancel_main'].includes(i.customId), time: 120000 });
+            const collector = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && (i.customId.startsWith('fam_') || i.customId === 'create_fam' || i.customId === 'cancel_main'), time: 120000 });
 
             collector.on('collect', async (i) => {
-                if (i.customId === 'cancel_main' || i.values?.[0] === 'cancel') return i.message.delete();
+                if (i.customId === 'cancel_main' || i.customId === 'fam_cancel') return i.message.delete();
                 
                 if (i.customId === 'create_fam') {
                     const modal = new ModalBuilder().setCustomId('modal_create_fam').setTitle('Nouvelle Famille');
@@ -801,7 +817,33 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                     return i.showModal(modal);
                 }
 
-                const action = i.values[0];
+                const action = i.customId.startsWith('fam_') ? i.customId.replace('fam_', '') : null;
+                if (!action) return;
+
+                if (action === 'lineage') {
+                    const buffer = await generateFamilyImage(client, authorId);
+                    return i.reply({ files: [new AttachmentBuilder(buffer, { name: 'family.png' })], flags: MessageFlags.Ephemeral });
+                }
+                if (action === 'full') {
+                    const family = await db.getFamily(authorData.familyName);
+                    const membersStr = (await Promise.all(family.members.map(async mId => {
+                        const u = client.users.cache.get(mId) || await client.users.fetch(mId).catch(() => null);
+                        return u ? `• ${u.username}` : `• ${mId}`;
+                    }))).join('\n');
+                    return i.reply({ content: `📜 **Membres de la famille ${authorData.familyName.toUpperCase()} :**\n${membersStr}`, flags: MessageFlags.Ephemeral });
+                }
+                if (action === 'hist') return i.reply({ content: "📜 Historique à venir.", flags: MessageFlags.Ephemeral });
+                if (action === 'transfer') {
+                    const family = await db.getFamily(authorData.familyName);
+                    const options = await Promise.all(family.members.filter(mId => mId !== authorId).map(async mId => {
+                        const u = client.users.cache.get(mId) || await client.users.fetch(mId).catch(() => null);
+                        return { label: u ? u.username : mId, value: mId };
+                    }));
+                    if (options.length === 0) return i.reply({ content: "❌ Aucun autre membre disponible.", flags: MessageFlags.Ephemeral });
+                    const transferRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('transfer_target').setPlaceholder('Nouveau Chef...').addOptions(options));
+                    return i.update({ content: "👑 Choisissez le nouveau chef de la dynastie :", components: [transferRow] });
+                }
+
                 if (action === 'delete') {
                     const confirm = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('confirm_del').setLabel('Confirmer').setStyle(ButtonStyle.Danger));
                     return i.update({ content: "⚠️ Dissoudre la famille ?", components: [confirm] });
@@ -828,9 +870,16 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
 
                 try {
                     const ui = await i.message.awaitMessageComponent({ 
-                        filter: subI => subI.user.id === authorId && subI.customId === 'u', 
+                        filter: subI => subI.user.id === authorId && ['u', 'transfer_target'].includes(subI.customId), 
                         time: 60000 
                     });
+
+                    if (ui.customId === 'transfer_target') {
+                        await db.updateFamily(authorData.familyName, { head: ui.values[0] });
+                        await msg.delete();
+                        return ui.channel.send(`👑 **${formatMention(ui.values[0])}** est le nouveau chef de la famille **${authorData.familyName.toUpperCase()}** !`);
+                    }
+
                     await ui.deferUpdate();
 
                     const targetId = ui.values[0];
