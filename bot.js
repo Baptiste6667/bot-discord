@@ -18,17 +18,8 @@ const {
     ModalBuilder,
     TextInputBuilder,
     TextInputStyle,
-    MessageFlags
+    MessageFlags,
 } = require('discord.js');
-// NOTE: 'canvas' (node-canvas) peut ne pas être installé sur certains hébergeurs (ex: Render).
-// On le charge de façon optionnelle afin d'éviter un crash complet du bot.
-let createCanvas = null;
-let loadImage = null;
-try {
-    ({ createCanvas, loadImage } = require('canvas'));
-} catch (e) {
-    console.warn(`[WARN] La dépendance 'canvas' est introuvable. La commande family (génération d'image) sera désactivée.`);
-}
 
 const axios = require('axios');
 
@@ -82,117 +73,131 @@ async function updateUBBalance(guildId, userId, cashDelta) {
     }
 }
 
-// --- Visual Tree Generator ---
-async function generateFamilyImage(client, userId) {
-    if (!createCanvas || !loadImage) {
-        return null; // fallback: pas d'image si canvas indisponible
-    }
-    const canvas = createCanvas(800, 450); // Canvas size
+// --- Text-based Tree Generator (Fallback) ---
+async function generateFamilyText(client, userId, prefix = "", isLast = true, visited = new Set()) {
+    if (visited.has(userId)) return "";
+    visited.add(userId);
 
-
-    const ctx = canvas.getContext('2d');
-    const userData = await db.getOrCreateUser(userId); // Fetch user data from DB
+    const userData = await db.getOrCreateUser(userId);
+    const user = client.users.cache.get(userId) || await client.users.fetch(userId).catch(() => null);
+    const name = user ? user.username : userId;
     
-    ctx.fillStyle = '#2c2f33';
-    ctx.fillRect(0, 0, 800, 450);
-    
-    ctx.strokeStyle = '#ffffff';
-    ctx.lineWidth = 2;
-    ctx.font = 'bold 14px sans-serif';
-
-    const drawNode = async (id, x, y, color = '#7289da') => {
-        if (!id) return;
-        const user = client.users.cache.get(id) || (typeof id === 'string' ? await client.users.fetch(id).catch(() => null) : null);
-        const name = (user ? user.username : id)?.toString() || "Inconnu";
-
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.roundRect(x - 85, y - 25, 170, 50, 12);
-        ctx.fill();
-
-        if (user) {
-            try {
-                const avatar = await loadImage(user.displayAvatarURL({ extension: 'png', size: 64 }));
-                ctx.save();
-                ctx.beginPath();
-                ctx.arc(x - 55, y, 20, 0, Math.PI * 2);
-                ctx.closePath();
-                ctx.clip();
-                ctx.drawImage(avatar, x - 75, y - 20, 40, 40);
-                ctx.restore();
-                
-                ctx.fillStyle = '#ffffff';
-                ctx.textAlign = 'left';
-                ctx.fillText(name.substring(0, 12), x - 28, y + 5);
-            } catch (err) {
-                ctx.fillStyle = '#ffffff';
-                ctx.textAlign = 'center';
-                ctx.fillText(name.substring(0, 15), x, y + 5);
-            }
-        } else {
-            ctx.fillStyle = '#ffffff';
-            ctx.textAlign = 'center';
-            ctx.fillText(name.substring(0, 15), x, y + 5);
-        }
-    };
-
-    const centerX = 400, centerY = 225;
-
+    let spouseInfo = "";
     if (userData.spouse) {
-        ctx.beginPath(); ctx.moveTo(centerX + 85, centerY); ctx.lineTo(centerX + 115, centerY); ctx.stroke();
-        await drawNode(userData.spouse, centerX + 200, centerY);
+        const spouseUser = client.users.cache.get(userData.spouse) || await client.users.fetch(userData.spouse).catch(() => null);
+        spouseInfo = ` ❤️ ${spouseUser ? spouseUser.username : userData.spouse}`;
     }
-    const parents = [userData.father, userData.mother].filter(p => p !== null);
-    for (let i = 0; i < parents.length; i++) {
-        const xPos = centerX - 100 + (i * 200);
-        ctx.beginPath(); ctx.moveTo(centerX, centerY - 25); ctx.lineTo(xPos, 100 + 25); ctx.stroke();
-        await drawNode(parents[i], xPos, 100);
-    }
-
-    const children = userData.children.slice(0, 3);
+    let result = prefix + (isLast ? "└── " : "├── ") + name + spouseInfo + "\n";
+    
+    const children = userData.children || [];
     for (let i = 0; i < children.length; i++) {
-        const xPos = 200 + (i * 200);
-        ctx.beginPath(); ctx.moveTo(centerX, centerY + 25); ctx.lineTo(xPos, 350 - 25); ctx.stroke();
-        await drawNode(children[i], xPos, 350);
+        const newPrefix = prefix + (isLast ? "    " : "│   ");
+        result += await generateFamilyText(client, children[i], newPrefix, i === children.length - 1, visited);
     }
-    await drawNode(userId, centerX, centerY, '#faa61a');
+    
+    return result;
+}
 
-    return canvas.toBuffer();
+// --- Visual Tree Generator (Disabled) ---
+async function generateFamilyImage(client, userId) {
+    return null; // Visual image generation is disabled as per user request.
 }
 
 // This function now needs to be async as it fetches data from DB
-async function getExtendedFamily(userId) {
+async function getExtendedFamily(userId) { // Optimized to reduce DB calls
     const user = await db.getOrCreateUser(userId);
     const siblings = new Set();
     const grandparents = new Set();
     const unclesAunts = new Set();
     const cousins = new Set();
 
-    const parents = [user.father, user.mother].filter(p => p !== null);
-    const parentDataArray = await Promise.all(parents.map(pId => db.getOrCreateUser(pId)));
-    
-    for (const parentData of parentDataArray) {
-        for (const cId of parentData.children) {
-            if (cId !== userId) siblings.add(cId);
-        }
-        if (parentData.father) grandparents.add(parentData.father);
-        if (parentData.mother) grandparents.add(parentData.mother);
+    let allUsersInScope = {}; // Map to store all fetched user data
+    allUsersInScope[userId] = user;
+
+    // Collect all direct relations first
+    const directRelatedIds = new Set();
+    if (user.father) directRelatedIds.add(user.father);
+    if (user.mother) directRelatedIds.add(user.mother);
+    if (user.children) user.children.forEach(id => directRelatedIds.add(id));
+
+    // If user has a family, fetch all family members to build relationships in memory
+    if (user.familyName) {
+        const familyMembers = await db.getFamilyMembers(user.familyName);
+        familyMembers.forEach(id => directRelatedIds.add(id)); // Add all family members to fetch list
     }
 
-    for (const parentData of parentDataArray) {
-        const gps = [parentData.father, parentData.mother].filter(gp => gp !== null);
-        const gpDataArray = await Promise.all(gps.map(gpId => db.getOrCreateUser(gpId)));
-        for (const gpData of gpDataArray) {
-            for (const siblingOfParentId of gpData.children) {
-                if (siblingOfParentId !== parentData._id) {
-                    unclesAunts.add(siblingOfParentId);
-                    // Cousins (children of uncles/aunts)
-                    const uaData = await db.getOrCreateUser(siblingOfParentId);
-                    for (const cousinId of uaData.children) {
-                        cousins.add(cousinId);
-                    }
+    // Fetch all unique direct related users and family members in parallel
+    const fetchedDirectRelated = await Promise.all(Array.from(directRelatedIds).map(id => db.getOrCreateUser(id)));
+    fetchedDirectRelated.forEach(u => {
+        if (u) allUsersInScope[u._id] = u;
+    });
+
+    const currentUserData = allUsersInScope[userId];
+    if (!currentUserData) return { siblings, grandparents, unclesAunts, cousins };
+
+    const getParents = (u) => [u.father, u.mother].filter(Boolean);
+    const getChildren = (u) => u.children || [];
+
+    // Find siblings
+    const userParents = getParents(currentUserData);
+    for (const parentId of userParents) {
+        const parentData = allUsersInScope[parentId];
+        if (parentData) {
+            for (const childId of getChildren(parentData)) {
+                if (childId !== userId) siblings.add(childId);
+            }
+        }
+    }
+
+    // Find grandparents
+    for (const parentId of userParents) {
+        const parentData = allUsersInScope[parentId];
+        if (parentData) {
+            getParents(parentData).forEach(gpId => grandparents.add(gpId));
+        }
+    }
+
+    // Collect all grandparent IDs to fetch their data if not already in scope
+    const newIdsToFetch = new Set();
+    grandparents.forEach(id => {
+        if (!allUsersInScope[id]) newIdsToFetch.add(id);
+    });
+
+    // Fetch newly identified grandparents
+    const fetchedGrandparents = await Promise.all(Array.from(newIdsToFetch).map(id => db.getOrCreateUser(id)));
+    fetchedGrandparents.forEach(u => {
+        if (u) allUsersInScope[u._id] = u;
+    });
+
+    // Find uncles/aunts and cousins
+    for (const gpId of Array.from(grandparents)) {
+        const gpData = allUsersInScope[gpId];
+        if (gpData) {
+            for (const childOfGpId of getChildren(gpData)) {
+                if (!userParents.includes(childOfGpId)) { // If not a direct parent of the user
+                    unclesAunts.add(childOfGpId);
                 }
             }
+        }
+    }
+
+    // Collect all uncle/aunt IDs to fetch their data if not already in scope
+    newIdsToFetch.clear();
+    unclesAunts.forEach(id => {
+        if (!allUsersInScope[id]) newIdsToFetch.add(id);
+    });
+
+    // Fetch newly identified uncles/aunts
+    const fetchedUnclesAunts = await Promise.all(Array.from(newIdsToFetch).map(id => db.getOrCreateUser(id)));
+    fetchedUnclesAunts.forEach(u => {
+        if (u) allUsersInScope[u._id] = u;
+    });
+
+    // Process uncles/aunts to find cousins
+    for (const uaId of Array.from(unclesAunts)) {
+        const uaData = allUsersInScope[uaId];
+        if (uaData) {
+            getChildren(uaData).forEach(cousinId => cousins.add(cousinId));
         }
     }
     return { siblings, grandparents, unclesAunts, cousins };
@@ -222,7 +227,7 @@ async function getReverseRole(role, targetData = null) { // Made async as target
 }
 
 // Gère la propagation du nom de famille aux descendants non mariés et sans enfants
-async function propagateNameChange(userId, oldName, newName) { // No longer needs `data`
+async function propagateNameChange(userId, oldName, newName) { // Optimized to batch updates
     const user = await db.getOrCreateUser(userId);
     if (!user) return;
 
@@ -249,6 +254,7 @@ async function propagateNameChange(userId, oldName, newName) { // No longer need
         }
     }
 }
+
 
 async function areRelated(id1, id2) { // Made async
     if (id1 === id2) return 'soi-même';
@@ -287,7 +293,7 @@ async function getFamilyHead(familyName) { // Made async
 }
 
 // New function to merge two families
-async function mergeFamilies(inviterFamilyName, invitedFamilyName, inviterId, invitedId, role) { // Made async
+async function mergeFamilies(inviterFamilyName, invitedFamilyName, inviterId, invitedId, role) { // Optimized to batch updates
     const inviterFamily = await db.getFamily(inviterFamilyName);
     const invitedFamily = await db.getFamily(invitedFamilyName);
 
@@ -295,6 +301,8 @@ async function mergeFamilies(inviterFamilyName, invitedFamilyName, inviterId, in
         console.error("Attempted to merge non-existent families.");
         return;
     }
+    
+    const userUpdates = []; // Collect all user update promises
 
     // Add all members of the invited family to the inviter's family
     for (const memberId of invitedFamily.members) {
@@ -302,28 +310,40 @@ async function mergeFamilies(inviterFamilyName, invitedFamilyName, inviterId, in
             inviterFamily.members.push(memberId);
         }
         // Update each member's familyName
-        await db.updateUser(memberId, { familyName: inviterFamilyName });
+        userUpdates.push(db.updateUser(memberId, { familyName: inviterFamilyName }));
     }
     await db.updateFamily(inviterFamilyName, { members: inviterFamily.members });
 
     // Pont relationnel logique
     const inviter = await db.getOrCreateUser(inviterId);
     const invited = await db.getOrCreateUser(invitedId);
+    
+    // Fetch parents/grandparents if needed for relational logic
+    const relatedIdsForRelationalLogic = new Set();
+    if (inviter.father) relatedIdsForRelationalLogic.add(inviter.father);
+    if (inviter.mother) relatedIdsForRelationalLogic.add(inviter.mother);
+    if (invited.father) relatedIdsForRelationalLogic.add(invited.father);
+    if (invited.mother) relatedIdsForRelationalLogic.add(invited.mother);
+
+    const fetchedRelatedUsers = {};
+    await Promise.all(Array.from(relatedIdsForRelationalLogic).map(async id => {
+        fetchedRelatedUsers[id] = await db.getOrCreateUser(id);
+    }));
 
     if (role === 'oncle' || role === 'tante') {
         // La cible devient le frère/soeur d'un des parents de l'inviteur
         const parentId = inviter.father || inviter.mother;
         if (parentId) {
-            const pData = await db.getOrCreateUser(parentId);
+            const pData = fetchedRelatedUsers[parentId] || await db.getOrCreateUser(parentId);
             if (pData && (pData.father || pData.mother)) {
                 // On donne à l'invité les mêmes parents que le parent de l'inviteur (les grands-parents)
-                await db.updateUser(invitedId, { father: pData.father, mother: pData.mother });
+                userUpdates.push(db.updateUser(invitedId, { father: pData.father, mother: pData.mother }));
                 const gps = [pData.father, pData.mother].filter(g => g !== null);
                 for (const gpId of gps) {
-                    const gpData = await db.getOrCreateUser(gpId);
+                    const gpData = fetchedRelatedUsers[gpId] || await db.getOrCreateUser(gpId);
                     if (gpData && !gpData.children.includes(invitedId)) {
-                        gpData.children.push(invitedId);
-                        await db.updateUser(gpId, { children: gpData.children });
+                        const updatedChildren = [...gpData.children, invitedId];
+                        userUpdates.push(db.updateUser(gpId, { children: updatedChildren }));
                     }
                 }
             }
@@ -331,13 +351,13 @@ async function mergeFamilies(inviterFamilyName, invitedFamilyName, inviterId, in
     } else if (role === 'frère' || role === 'soeur') {
         // La cible partage les mêmes parents que l'inviteur
         if (inviter.father || inviter.mother) {
-            await db.updateUser(invitedId, { father: inviter.father, mother: inviter.mother });
+            userUpdates.push(db.updateUser(invitedId, { father: inviter.father, mother: inviter.mother }));
             const ps = [inviter.father, inviter.mother].filter(p => p !== null);
             for (const pId of ps) {
-                const pData = await db.getOrCreateUser(pId);
+                const pData = fetchedRelatedUsers[pId] || await db.getOrCreateUser(pId);
                 if (pData && !pData.children.includes(invitedId)) {
-                    pData.children.push(invitedId);
-                    await db.updateUser(pId, { children: pData.children });
+                    const updatedChildren = [...pData.children, invitedId];
+                    userUpdates.push(db.updateUser(pId, { children: updatedChildren }));
                 }
             }
         }
@@ -345,17 +365,20 @@ async function mergeFamilies(inviterFamilyName, invitedFamilyName, inviterId, in
         // La cible devient le parent d'un des parents de l'inviteur
         const parentId = inviter.father || inviter.mother;
         if (parentId) {
-            const pData = await db.getOrCreateUser(parentId);
+            const pData = fetchedRelatedUsers[parentId] || await db.getOrCreateUser(parentId);
             if (pData) {
                 const field = role === 'grand-père' ? 'father' : 'mother';
-                await db.updateUser(parentId, { [field]: invitedId });
+                userUpdates.push(db.updateUser(parentId, { [field]: invitedId }));
             }
             if (invited && !invited.children.includes(parentId)) {
-                invited.children.push(parentId);
-                await db.updateUser(invitedId, { children: invited.children });
+                const updatedChildren = [...invited.children, parentId];
+                userUpdates.push(db.updateUser(invitedId, { children: updatedChildren }));
             }
         }
     }
+
+    // Execute all collected user updates
+    await Promise.all(userUpdates);
 
     // Remove the invited family
     await db.deleteFamily(invitedFamilyName);
@@ -370,7 +393,7 @@ const client = new Client({
     ]
 });
 // --- Logique de modification des liens --- (Now async)
-async function executeLinkChange(id1, id2, role, action) { // No longer needs `data`
+async function executeLinkChange(id1, id2, role, action) { // Optimized to fetch users concurrently
     const d1 = await db.getOrCreateUser(id1);
     const d2 = await db.getOrCreateUser(id2);
 
@@ -406,10 +429,12 @@ async function executeLinkChange(id1, id2, role, action) { // No longer needs `d
         delete d2Update.customLinks[id1];
     }
 
+    const updatePromises = [];
+
     if (action === 'remove') {
-        await db.updateUser(id1, d1Update);
-        await db.updateUser(id2, d2Update);
-        return;
+        updatePromises.push(db.updateUser(id1, d1Update));
+        updatePromises.push(db.updateUser(id2, d2Update));
+        return Promise.all(updatePromises);
     }
 
     // IMPORTANT: avoid cutting someone who is married to a third party.
@@ -431,11 +456,12 @@ async function executeLinkChange(id1, id2, role, action) { // No longer needs `d
         const nextD1Links = { ...(d1Update.customLinks || d1.customLinks || {}) };
         const nextD2Links = { ...(d2Update.customLinks || d2.customLinks || {}) };
         nextD1Links[id2] = role;
-        nextD2Links[id1] = await getReverseRole(role, d1);
+        nextD2Links[id1] = await getReverseRole(role, d1); // d1 is already fetched
         d1Update.customLinks = nextD1Links;
         d2Update.customLinks = nextD2Links;
     }
 
+    // Execute all updates concurrently
     await db.updateUser(id1, d1Update);
     await db.updateUser(id2, d2Update);
 
@@ -455,7 +481,7 @@ async function checkAndProposeMarriage(userId, familyName) {
         if (mId === userId) continue;
         const mData = await db.getOrCreateUser(mId);
         if (mData.spouse) continue;
-        
+
         const rel = await areRelated(userId, mId);
         const targetRel = await areRelated(mId, userId);
         
@@ -470,7 +496,7 @@ async function checkAndProposeMarriage(userId, familyName) {
 async function startFamilyVote(interaction, author, target, role, action) {
     const voteEmbed = new EmbedBuilder()
         .setTitle("🗳️ Vote de la Communauté")
-        .setColor("#f1c40f")
+        .setColor("#F1C40F")
         .setDescription(`**${author.username}** demande :\n**Action :** ${action === 'remove' ? 'Exclure' : 'Modifier'}\n**Cible :** ${target}\n**Nouveau Rôle :** ${role}\n\nL'action sera appliquée si le **OUI** l'emporte (60s).`)
         .setFooter({ text: "La majorité décide du sort de la famille." });
 
@@ -481,7 +507,7 @@ async function startFamilyVote(interaction, author, target, role, action) {
 
     let voteMsg;
     if (interaction.replied || interaction.deferred) {
-        voteMsg = await interaction.editReply({ embeds: [voteEmbed], components: [row], content: null });
+        voteMsg = await interaction.editReply({ embeds: [voteEmbed], components: [row] });
     } else {
         voteMsg = await interaction.update({ embeds: [voteEmbed], components: [row], content: null });
     }
@@ -491,11 +517,12 @@ async function startFamilyVote(interaction, author, target, role, action) {
 
     collector.on('collect', async (i) => {
         if (i.customId === 'v_yes') { votesNo.delete(i.user.id); votesYes.add(i.user.id); }
-        else { votesYes.delete(i.user.id); votesNo.add(i.user.id); }
+        else { votesYes.delete(i.user.id); votesNo.add(i.user.id); } // Corrected logic for votesNo
+        const totalVotes = votesYes.size + votesNo.size;
         
         const upRow = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId('v_yes').setLabel(`OUI (${votesYes.size})`).setStyle(ButtonStyle.Success),
-            new ButtonBuilder().setCustomId('v_no').setLabel(`NON (${votesNo.size})`).setStyle(ButtonStyle.Danger)
+            new ButtonBuilder().setCustomId('v_yes').setLabel(`OUI (${votesYes.size})`).setStyle(ButtonStyle.Success).setDisabled(false),
+            new ButtonBuilder().setCustomId('v_no').setLabel(`NON (${votesNo.size})`).setStyle(ButtonStyle.Danger).setDisabled(false)
         );
         await i.update({ components: [upRow] });
     });
@@ -503,7 +530,14 @@ async function startFamilyVote(interaction, author, target, role, action) {
     collector.on('end', async () => {
         if (votesYes.size > votesNo.size) {
             if (action === 'remove') {
-                await executeLinkChange(author.id, target.id, role, 'remove');
+                // For a full removal from the family, clear all user family links
+                await clearUserFamilyLinks(target.id);
+                // Also remove the target from the family's member list if they were part of one
+                const targetFamily = await db.getFamily(targetData.familyName);
+                if (targetFamily) {
+                    const updatedMembers = targetFamily.members.filter(id => id !== target.id);
+                    await db.updateFamily(targetFamily._id, { members: updatedMembers });
+                }
                 await interaction.deleteReply();
                 await interaction.channel.send(`✅ **Vote validé !** Lien rompu entre ${author} et ${target}.`);
             } else {
@@ -522,7 +556,7 @@ async function sendInvitation(interaction, author, target, role, action, fromVot
 
     let inviteEmbed = new EmbedBuilder()
         .setTitle("📩 Invitation Familiale")
-        .setColor("#FFD700")
+        .setColor("#FFD700") // Gold color
         .setDescription(`${target}, **${author.username}** souhaite vous lier en tant que **${role}**.\n${fromVote ? "*(Approuvé par vote)*" : ""}\n\nAcceptez-vous de rejoindre cette famille ?`)
         .setFooter({ text: "Acceptez-vous de rejoindre cette famille ?" });
 
@@ -535,7 +569,7 @@ async function sendInvitation(interaction, author, target, role, action, fromVot
             new ButtonBuilder().setCustomId('i_no').setLabel('Refuser').setStyle(ButtonStyle.Danger)
         );
     } else {
-        // If role is 'conjoint', only offer accept/refuse. No merge option.
+        // If role is 'conjoint' or no family conflict, only offer accept/refuse. No merge option.
         row = new ActionRowBuilder().addComponents( 
             new ButtonBuilder().setCustomId('i_ok').setLabel('Accepter').setStyle(ButtonStyle.Success),
             new ButtonBuilder().setCustomId('i_no').setLabel('Refuser').setStyle(ButtonStyle.Danger)
@@ -551,28 +585,42 @@ async function sendInvitation(interaction, author, target, role, action, fromVot
         if (i.user.id !== target.id) return i.reply({ content: "Ce n'est pas pour vous.", flags: MessageFlags.Ephemeral });
 
         if (i.customId === 'i_ok') {
-            if (targetData.familyName && authorData.familyName && targetData.familyName !== authorData.familyName) {
-                await clearUserFamilyLinks(target.id);
+            const updatePromises = [];
+            const isBothFamilyMarriage = role === 'conjoint' && authorData.familyName && targetData.familyName && authorData.familyName !== targetData.familyName;
+
+            if (targetData.familyName && authorData.familyName && targetData.familyName !== authorData.familyName && !isBothFamilyMarriage) {
+                updatePromises.push(clearUserFamilyLinks(target.id));
             }
-            await executeLinkChange(author.id, target.id, role, action);
-            if (authorData.familyName) {
+            updatePromises.push(executeLinkChange(author.id, target.id, role, action));
+            if (authorData.familyName && !isBothFamilyMarriage) {
                 const family = await db.getFamily(authorData.familyName);
                 if (family && !family.members.includes(target.id)) {
                     family.members.push(target.id);
-                    await db.updateFamily(authorData.familyName, { members: family.members });
+                    updatePromises.push(db.updateFamily(authorData.familyName, { members: family.members }));
                 }
-                await db.updateUser(target.id, { familyName: authorData.familyName });
+                updatePromises.push(db.updateUser(target.id, { familyName: authorData.familyName }));
             }
+            await Promise.all(updatePromises);
             await i.message.delete();
             await i.channel.send(`🎊 Félicitations ! ${target} est maintenant le/la **${role}** de ${author} !`);
         } else if (i.customId === 'i_merge') {
-            await mergeFamilies(authorData.familyName, targetData.familyName, author.id, target.id, role);
-            await executeLinkChange(author.id, target.id, role, action);
+            const mergePromises = [];
+            mergePromises.push(mergeFamilies(authorData.familyName, targetData.familyName, author.id, target.id, role));
+            mergePromises.push(executeLinkChange(author.id, target.id, role, action));
+            await Promise.all(mergePromises);
             await i.message.delete();
             await i.channel.send(`🤝 Les familles ont fusionné ! ${target} est maintenant le/la **${role}** de ${author} !`);
         } else {
             await i.message.delete();
             await i.channel.send(`😔 ${target} a refusé l'invitation de ${author}.`);
+        }
+        collector.stop();
+    });
+
+    collector.on('end', async (collected, reason) => {
+        if (reason === 'time' && (msg || await interaction.fetchReply())) {
+            await (msg || await interaction.fetchReply()).edit({ components: [] }).catch(() => {}); // Disable buttons if timed out
+            await interaction.channel.send(`⌛ L'invitation de ${author} à ${target} a expiré.`);
         }
         collector.stop();
     });
@@ -591,7 +639,7 @@ client.on('messageCreate', async (message) => {
     const authorId = message.author.id;
     const authorData = await db.getOrCreateUser(authorId);
 
-    const target = message.mentions.users.first();
+    const target = message.mentions.users.first(); // Target user for commands
     if (['adminfamily', 'family', 'account', 'info'].includes(command)) {
         await message.channel.sendTyping();
     }
@@ -603,7 +651,7 @@ client.on('messageCreate', async (message) => {
             if (!message.member.permissions.has(PermissionFlagsBits.Administrator)) return message.reply("❌ Admin uniquement.");
             const familyName = args.join(' ');
             if (!familyName) return message.reply(`Usage: ${PREFIX}adminfamily <Nom de la famille>`);
-
+            
             const family = await db.getFamily(familyName);
             if (!family) return message.reply(`❌ Famille "${familyName}" introuvable.`);
 
@@ -625,14 +673,16 @@ client.on('messageCreate', async (message) => {
                 new ButtonBuilder().setCustomId('adm_hist').setLabel('📜 Historique').setStyle(ButtonStyle.Secondary)
             );
 
-            const msg = await message.reply({ embeds: [embed], components: [row, row2] });
+            const msg = await message.reply({ embeds: [embed], components: [row, row2] }); // Initial reply
             const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId && i.customId.startsWith('adm_'), time: 120000 });
 
             coll.on('collect', async (i) => {
                 if (i.customId === 'adm_cancel') return i.message.delete();
                 if (i.customId === 'adm_clear') {
-for (const mId of family.members) await db.updateUser(mId, { familyName: null, spouse: null, children: [], mother: null, father: null, customLinks: {} });
-                    await db.deleteFamily(familyName);
+                    for (const mId of family.members) {
+                        await db.updateUser(mId, { familyName: null, spouse: null, children: [], mother: null, father: null, customLinks: {} });
+                    }
+                    await db.deleteFamily(familyName); // Delete the family after clearing members
                     await i.message.delete();
                     return i.channel.send(`✅ Famille **${familyName.toUpperCase()}** supprimée.`);
                 }
@@ -641,21 +691,25 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
 
                 if (action === 'lineage') {
                     const buffer = await generateFamilyImage(client, family.head);
-                    return i.reply({ files: [new AttachmentBuilder(buffer, { name: 'family.png' })], flags: MessageFlags.Ephemeral });
+                    if (!buffer) {
+                        const textTree = await generateFamilyText(client, family.head);
+                        return i.reply({ content: `🌳 **Arbre de la famille :**\n\`\`\`\n${textTree}\n\`\`\``, ephemeral: true });
+                    }
+                    return i.reply({ files: [new AttachmentBuilder(buffer, { name: 'family.png' })], ephemeral: true });
                 }
-                if (action === 'full') {
+                if (action === 'full') { // Display all members of the family
                     const membersStr = (await Promise.all(family.members.map(async mId => {
                         const u = client.users.cache.get(mId) || await client.users.fetch(mId).catch(() => null);
                         return u ? `• ${u.username}` : `• ${mId}`;
                     }))).join('\n');
-                    return i.reply({ content: `📜 **Membres (${familyName.toUpperCase()}) :**\n${membersStr}`, flags: MessageFlags.Ephemeral });
+                    return i.reply({ content: `📜 **Membres (${familyName.toUpperCase()}) :**\n${membersStr}`, ephemeral: true });
                 }
-                if (action === 'hist') return i.reply({ content: "📜 L'historique sera disponible bientôt.", flags: MessageFlags.Ephemeral });
+                if (action === 'hist') return i.reply({ content: "📜 L'historique sera disponible bientôt.", ephemeral: true });
 
                 let targetSelectRow;
-                if (action === 'add') {
+                if (action === 'add') { // For adding, use UserSelectMenu to pick any user
                     targetSelectRow = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('target').setPlaceholder('Choisir le membre à ajouter...'));
-                } else {
+                } else { // For modify/remove, use StringSelectMenu with existing family members
                     const options = await Promise.all(family.members.map(async (mId) => {
                         const user = client.users.cache.get(mId) || await client.users.fetch(mId).catch(() => null);
                         return { label: user ? user.username : mId, value: mId };
@@ -668,23 +722,30 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                     const ui = await i.message.awaitMessageComponent({ 
                         filter: subI => subI.user.id === authorId && subI.customId === 'target', 
                         time: 60000 
-                    });
+                    }); // Wait for user selection
                     await ui.deferUpdate(); // Acquittement immédiat pour éviter le timeout de 3s
 
                     const targetId = ui.values[0];
                     const targetData = await db.getOrCreateUser(targetId);
 
                     if (action === 'add' && targetData.familyName === family._id) {
-                        await ui.followUp({ content: "❌ Cet utilisateur est déjà dans cette famille.", flags: MessageFlags.Ephemeral });
+                        await ui.followUp({ content: "❌ Cet utilisateur est déjà dans cette famille.", ephemeral: true });
                         return msg.delete();
                     }
                     if ((action === 'remove' || action === 'modify') && targetData.familyName !== family._id) {
-                        await ui.followUp({ content: "❌ Cet utilisateur n'est pas dans cette famille.", flags: MessageFlags.Ephemeral });
+                        await ui.followUp({ content: "❌ Cet utilisateur n'est pas dans cette famille.", ephemeral: true });
                         return msg.delete();
                     }
 
                     if (action === 'remove') {
-                        await executeLinkChange(family.head, targetId, null, 'remove');
+                        // For a full removal from the family, clear all user family links
+                        await clearUserFamilyLinks(targetId);
+                        // Also remove the target from the family's member list
+                        const currentFamily = await db.getFamily(familyName); // Re-fetch to ensure it's up-to-date
+                        if (currentFamily) {
+                            const updatedMembers = currentFamily.members.filter(id => id !== targetId);
+                            await db.updateFamily(currentFamily._id, { members: updatedMembers });
+                        }
                         await msg.delete();
                         return ui.channel.send(`✅ Membre <@${targetId}> retiré de la famille.`);
                     }
@@ -694,7 +755,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                             .addOptions(ROLES_LIST.map(r => ({ label: r, value: r }))),
                         new ButtonBuilder().setCustomId('cancel_role').setLabel('Annuler').setStyle(ButtonStyle.Danger)
                     );
-                    
+
                     // On utilise editReply car l'interaction a été "deferred"
                     await ui.editReply({ content: `Attribuer un rôle à <@${targetId}> :`, components: [rMenu] });
 
@@ -702,7 +763,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                         const ri = await i.message.awaitMessageComponent({ 
                             filter: subI => subI.user.id === authorId && ['role', 'cancel_role'].includes(subI.customId), 
                             time: 60000 
-                        });
+                        }); // Wait for role selection
                         await ri.deferUpdate(); // Acquittement immédiat
                         
                         if (ri.customId === 'cancel_role') return i.message.delete();
@@ -720,7 +781,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                         await msg.edit({ content: "Action annulée ou temps écoulé pour le choix du rôle.", components: [] }).catch(() => {});
                     }
                 } catch (e) {
-                    console.error("Erreur sélection membre admin:", e);
+                    console.error("Erreur sélection membre admin:", e); // Log errors from awaitMessageComponent
                     await msg.edit({ content: "Action annulée ou temps écoulé pour la sélection du membre.", components: [] }).catch(() => {});
                 }
             });
@@ -734,7 +795,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                 const inputName = args.join(' ').toLowerCase();
                 const targetUser = message.mentions.users.first();
                 let targetId = targetUser ? targetUser.id : null;
-
+                
                 let family = await db.getFamily(inputName);
                 
                 if (targetId && !family) {
@@ -744,22 +805,30 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
 
                 if (!targetId && family) targetId = family.head;
                 else if (!targetId) return message.reply("❌ Famille introuvable.");
-
+                
                 const [buffer, ext] = await Promise.all([
                     generateFamilyImage(client, targetId),
                     getExtendedFamily(targetId)
                 ]);
 
-                const attachment = new AttachmentBuilder(buffer, { name: 'family.png' });
                 const displayTitle = family ? family._id.toUpperCase() : "Inconnue";
                 
                 const embed = new EmbedBuilder()
-                    .setTitle(`Généalogie de la Famille ${displayTitle}`)
+                    .setTitle(`Généalogie de la Famille ${displayTitle}`) // Display family name or "Inconnue"
                     .setColor('#5865F2')
-                    .setImage('attachment://family.png')
-                    .addFields(
-                        { name: '👑 Chef de Lignée', value: family ? formatMention(family.head) : 'Inconnu', inline: true },
-                        { name: '👥 Membres', value: family ? family.members.length.toString() : '1', inline: true },
+                
+                let files = [];
+                if (buffer) {
+                    embed.setImage('attachment://family.png');
+                    files = [new AttachmentBuilder(buffer, { name: 'family.png' })];
+                } else {
+                    const textTree = await generateFamilyText(client, targetId);
+                    embed.setDescription(`🌳 **Arbre (Mode Texte - Simplifié) :**\n\`\`\`\n${textTree}\n\`\`\``);
+                }
+                
+                embed.addFields( // Add fields for family details
+                        { name: '👑 Chef de Lignée', value: family?.head ? formatMention(family.head) : 'Inconnu', inline: true },
+                        { name: '👥 Membres', value: family?.members ? family.members.length.toString() : '1', inline: true },
                         { name: '👫 Fratrie', value: Array.from(ext.siblings).map(formatMention).join(', ') || 'Aucun', inline: false },
                         { name: '👴 Grands-parents', value: Array.from(ext.grandparents).map(formatMention).join(', ') || 'Aucun', inline: false },
                         { name: '👨‍👩‍👧‍👦 Oncles & Tantes', value: Array.from(ext.unclesAunts).map(formatMention).join(', ') || 'Aucun', inline: false },
@@ -768,10 +837,10 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                     .setFooter({ text: `Consulté par ${message.author.username}` })
                     .setTimestamp();
 
-                return message.reply({ embeds: [embed], files: [attachment] });
+                return message.reply({ embeds: [embed], files: files });
             }
 
-            const embed = new EmbedBuilder().setTitle("🏠 Gestion de Famille").setColor("#5865F2");
+            const embed = new EmbedBuilder().setTitle("🏠 Gestion de Famille").setColor("#5865F2"); // Main family dashboard
             const rows = [];
 
             if (!authorData.familyName) {
@@ -801,7 +870,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                 if (isHead) {
                     row3.addComponents(new ButtonBuilder().setCustomId('fam_delete').setLabel('🗑️ Dissoudre').setStyle(ButtonStyle.Danger));
                 }
-                row3.addComponents(new ButtonBuilder().setCustomId('fam_cancel').setLabel('Fermer').setStyle(ButtonStyle.Secondary));
+                row3.addComponents(new ButtonBuilder().setCustomId('fam_cancel').setLabel('Fermer').setStyle(ButtonStyle.Secondary)); // Cancel button
                 rows.push(row3);
             }
 
@@ -810,7 +879,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
 
             collector.on('collect', async (i) => {
                 if (i.customId === 'cancel_main' || i.customId === 'fam_cancel') return i.message.delete();
-                
+
                 if (i.customId === 'create_fam') {
                     const modal = new ModalBuilder().setCustomId('modal_create_fam').setTitle('Nouvelle Famille');
                     modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('fam_name').setLabel("Nom de famille").setStyle(TextInputStyle.Short).setRequired(true)));
@@ -820,32 +889,36 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                 const action = i.customId.startsWith('fam_') ? i.customId.replace('fam_', '') : null;
                 if (!action) return;
 
-                if (action === 'lineage') {
+                if (action === 'lineage') { // Display user's family tree
                     const buffer = await generateFamilyImage(client, authorId);
-                    return i.reply({ files: [new AttachmentBuilder(buffer, { name: 'family.png' })], flags: MessageFlags.Ephemeral });
+                    if (!buffer) {
+                        const textTree = await generateFamilyText(client, authorId);
+                        return i.reply({ content: `🌳 **Votre Arbre (Simplifié) :**\n\`\`\`\n${textTree}\n\`\`\``, ephemeral: true });
+                    }
+                    return i.reply({ files: [new AttachmentBuilder(buffer, { name: 'family.png' })], ephemeral: true });
                 }
-                if (action === 'full') {
+                if (action === 'full') { // Display all members of user's family
                     const family = await db.getFamily(authorData.familyName);
                     const membersStr = (await Promise.all(family.members.map(async mId => {
                         const u = client.users.cache.get(mId) || await client.users.fetch(mId).catch(() => null);
                         return u ? `• ${u.username}` : `• ${mId}`;
                     }))).join('\n');
-                    return i.reply({ content: `📜 **Membres de la famille ${authorData.familyName.toUpperCase()} :**\n${membersStr}`, flags: MessageFlags.Ephemeral });
+                    return i.reply({ content: `📜 **Membres de la famille ${authorData.familyName.toUpperCase()} :**\n${membersStr}`, ephemeral: true });
                 }
-                if (action === 'hist') return i.reply({ content: "📜 Historique à venir.", flags: MessageFlags.Ephemeral });
+                if (action === 'hist') return i.reply({ content: "📜 Historique à venir.", ephemeral: true }); // Placeholder for history
                 if (action === 'transfer') {
                     const family = await db.getFamily(authorData.familyName);
                     const options = await Promise.all(family.members.filter(mId => mId !== authorId).map(async mId => {
                         const u = client.users.cache.get(mId) || await client.users.fetch(mId).catch(() => null);
                         return { label: u ? u.username : mId, value: mId };
                     }));
-                    if (options.length === 0) return i.reply({ content: "❌ Aucun autre membre disponible.", flags: MessageFlags.Ephemeral });
-                    const transferRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('transfer_target').setPlaceholder('Nouveau Chef...').addOptions(options));
+                    if (options.length === 0) return i.reply({ content: "❌ Aucun autre membre disponible.", ephemeral: true });
+                    const transferRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('transfer_target').setPlaceholder('Nouveau Chef...').addOptions(options)); // Select menu for new head
                     return i.update({ content: "👑 Choisissez le nouveau chef de la dynastie :", components: [transferRow] });
                 }
 
                 if (action === 'delete') {
-                    const confirm = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('confirm_del').setLabel('Confirmer').setStyle(ButtonStyle.Danger));
+                    const confirm = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('confirm_del').setLabel('Confirmer').setStyle(ButtonStyle.Danger)); // Confirmation for deletion
                     return i.update({ content: "⚠️ Dissoudre la famille ?", components: [confirm] });
                 }
 
@@ -855,14 +928,14 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                     return i.channel.send(`👋 ${message.author} a quitté sa famille.`);
                 }
 
-                let targetSelectRow;
+                let targetSelectRow; // Select menu for target user
                 if (action === 'add') {
                     targetSelectRow = new ActionRowBuilder().addComponents(new UserSelectMenuBuilder().setCustomId('u').setPlaceholder('Choisir le futur membre...'));
                 } else {
                     const family = await db.getFamily(authorData.familyName);
                     const options = await Promise.all(family.members.map(async (mId) => {
                         const user = client.users.cache.get(mId) || await client.users.fetch(mId).catch(() => null);
-                        return { label: user ? user.username : mId, value: mId };
+                        return { label: user ? user.username : mId, value: mId }; // Options for existing family members
                     }));
                     targetSelectRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('u').setPlaceholder('Choisir le membre de la famille...').addOptions(options));
                 }
@@ -872,7 +945,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                     const ui = await i.message.awaitMessageComponent({ 
                         filter: subI => subI.user.id === authorId && ['u', 'transfer_target'].includes(subI.customId), 
                         time: 60000 
-                    });
+                    }); // Wait for user selection or transfer target
 
                     if (ui.customId === 'transfer_target') {
                         await db.updateFamily(authorData.familyName, { head: ui.values[0] });
@@ -887,20 +960,20 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                     const targetUser = client.users.cache.get(targetId) || await client.users.fetch(targetId).catch(() => null);
 
                     if (!targetUser) {
-                        await ui.followUp({ content: "❌ Impossible de trouver cet utilisateur.", flags: MessageFlags.Ephemeral });
+                        await ui.followUp({ content: "❌ Impossible de trouver cet utilisateur.", ephemeral: true });
                         return msg.delete();
                     }
 
                     if (action === 'add' && targetData.familyName === authorData.familyName) {
-                        await ui.followUp({ content: "❌ Cet utilisateur est déjà dans votre famille.", flags: MessageFlags.Ephemeral });
+                        await ui.followUp({ content: "❌ Cet utilisateur est déjà dans votre famille.", ephemeral: true });
                         return msg.delete();
                     }
                     if ((action === 'remove' || action === 'modify') && targetData.familyName !== authorData.familyName) {
-                        await ui.followUp({ content: "❌ Cet utilisateur n'est pas dans votre famille.", flags: MessageFlags.Ephemeral });
+                        await ui.followUp({ content: "❌ Cet utilisateur n'est pas dans votre famille.", ephemeral: true });
                         return msg.delete();
                     }
 
-        if (action === 'remove') return startFamilyVote(ui, message.author, targetUser, 'Aucun', 'remove');
+                    if (action === 'remove') return startFamilyVote(ui, message.author, targetUser, 'Aucun', 'remove');
 
                     // NOTE: when user changes a relation (modify), we must remove old relations
                     // through executeLinkChange(), otherwise old nodes remain in the tree.
@@ -912,7 +985,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                         filter: subI => subI.user.id === authorId && subI.customId === 'r', 
                         componentType: ComponentType.StringSelect, 
                         time: 60000 
-                    });
+                    }); // Wait for role selection
                     await ri.deferUpdate();
 
                     if (action === 'add') await sendInvitation(ri, message.author, targetUser, ri.values[0], 'add');
@@ -929,28 +1002,55 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
         case 'familytop':
         case 'account': {
             await message.channel.sendTyping();
-            const showWealth = async (uId, uData) => {
-                const members = [uId];
-                if (uData.spouse) members.push(uData.spouse);
-                uData.children.forEach(id => members.push(id));
-                const results = await Promise.all(members.map(id => getUBUser(message.guild.id, id)));
-                const total = results.reduce((acc, res) => acc + (res ? res.cash : 0), 0);
-                return new EmbedBuilder().setTitle('🏦 Banque Familiale').setColor('#f1c40f').addFields({ name: 'Fortune Totale', value: `💰 **${total.toLocaleString()}** cr.`, inline: false });
+            // Optimized showWealth and showTop functions
+            const fetchAllUBWealth = async (guildId, userMap) => {
+                const allUniqueUserIds = new Set();
+                for (const uId in userMap) {
+                    const uData = userMap[uId];
+                    allUniqueUserIds.add(uId);
+                    if (uData.spouse) allUniqueUserIds.add(uData.spouse);
+                    if (uData.children) uData.children.forEach(childId => allUniqueUserIds.add(childId));
+                }
+
+                const userWealthMap = new Map();
+                const ubFetchPromises = Array.from(allUniqueUserIds).map(async (id) => {
+                    const ubUser = await getUBUser(guildId, id);
+                    userWealthMap.set(id, ubUser ? ubUser.cash : 0);
+                });
+                await Promise.all(ubFetchPromises);
+                return userWealthMap;
             };
-            const showTop = async () => {
+
+            const allUsersData = await db.getAllUsers(); // Fetch all users once
+            const userWealthMap = await fetchAllUBWealth(message.guild.id, allUsersData);
+
+            const showWealth = (uId, uData) => {
+                let total = userWealthMap.get(uId) || 0;
+                if (uData.spouse) total += userWealthMap.get(uData.spouse) || 0;
+                if (uData.children) uData.children.forEach(id => total += userWealthMap.get(id) || 0);
+                return new EmbedBuilder().setTitle('🏦 Banque Familiale').setColor('#F1C40F').addFields({ name: 'Fortune Totale', value: `💰 **${total.toLocaleString()}** cr.`, inline: false });
+            };
+
+            const showTop = () => {
                 const familyWealths = [];
-                const allUsers = await db.getAllUsers();
-                const processed = new Set();
-                for (const uId of Object.keys(allUsers)) {
-                    const uData = allUsers[uId];
-                    let cId = uData.spouse ? [uId, uData.spouse].sort()[0] : uId;
-                    if (processed.has(cId)) continue;
-                    processed.add(cId);
-                    const members = [uId];
-                    if (uData.spouse) members.push(uData.spouse);
-                    uData.children.forEach(id => members.push(id));
-                    const res = await Promise.all(members.map(id => getUBUser(message.guild.id, id)));
-                    familyWealths.push({ headId: uId, total: res.reduce((acc, r) => acc + (r ? r.cash : 0), 0) });
+                const processedGroups = new Set(); // To avoid double counting for couples/families
+
+                for (const uId in allUsersData) {
+                    const uData = allUsersData[uId];
+                    const groupKey = uData.spouse ? [uId, uData.spouse].sort().join('-') : uId;
+                    if (processedGroups.has(groupKey)) continue;
+                    processedGroups.add(groupKey);
+
+                    let totalWealth = 0;
+                    const membersInGroup = new Set();
+                    membersInGroup.add(uId);
+                    if (uData.spouse) membersInGroup.add(uData.spouse);
+                    if (uData.children) uData.children.forEach(childId => membersInGroup.add(childId));
+
+                    for (const memberId of membersInGroup) {
+                        totalWealth += userWealthMap.get(memberId) || 0;
+                    }
+                    familyWealths.push({ headId: uId, total: totalWealth });
                 }
                 familyWealths.sort((a, b) => b.total - a.total);
                 const embed = new EmbedBuilder().setTitle('🏆 Top des Familles').setColor('#ffd700');
@@ -958,18 +1058,18 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                 return embed;
             };
 
-            const initialEmbed = (command === 'familytop') ? await showTop() : await showWealth(authorId, authorData);
+            const initialEmbed = (command === 'familytop') ? showTop() : showWealth(authorId, authorData);
             const row = new ActionRowBuilder().addComponents(
                 new ButtonBuilder().setCustomId('v_wealth').setLabel('Ma Fortune').setStyle(ButtonStyle.Success),
                 new ButtonBuilder().setCustomId('v_top').setLabel('🏆 Classement').setStyle(ButtonStyle.Primary),
                 new ButtonBuilder().setCustomId('cancel_bank').setLabel('❌').setStyle(ButtonStyle.Secondary)
             );
             const msg = await message.reply({ embeds: [initialEmbed], components: [row] });
-            const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 30000 });
+            const coll = msg.createMessageComponentCollector({ filter: i => i.user.id === authorId, time: 60000 }); // Increased timeout
             coll.on('collect', async (i) => {
                 if (i.customId === 'cancel_bank') return i.message.delete();
                 await i.deferUpdate();
-                const newEmbed = (i.customId === 'v_top') ? await showTop() : await showWealth(authorId, authorData);
+                const newEmbed = (i.customId === 'v_top') ? showTop() : showWealth(authorId, authorData);
                 await i.editReply({ embeds: [newEmbed] });
             });
             coll.on('end', async (collected, reason) => { if (reason === 'time') await msg.delete().catch(() => {}); });
@@ -977,7 +1077,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
         }
 
         case 'help': {
-            const h = new EmbedBuilder()
+            const h = new EmbedBuilder() // Help command embed
                 .setColor('#5865F2')
                 .setTitle('📚 Guide Complet de la Dynastie')
                 .setThumbnail(client.user.displayAvatarURL())
@@ -986,7 +1086,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                     { name: '🏠 Famille', value: `\`${PREFIX}family\` : Dashboard personnel.\n\`${PREFIX}family <Nom>\` : Voir l'arbre.` },
                     { name: 'ℹ️ Profil', value: `\`${PREFIX}info [@User]\` : Fiche d'identité et personnalisation.` },
                     { name: '💰 Fortune', value: `\`${PREFIX}account\` : Richesse du foyer et classement.` },
-                    { name: '💍 Social', value: `\`${PREFIX}marry <@User>\` : Demander quelqu'un en mariage.\n\`${PREFIX}divorce\`, \`${PREFIX}hug\`, \`${PREFIX}kiss\`, \`${PREFIX}pat\`, \`${PREFIX}slap\`, \`${PREFIX}poke\`` },
+                    { name: '💍 Social', value: `\`${PREFIX}marry <@User>\` : Demander quelqu'un en mariage.\n\`${PREFIX}divorce\` : Divorcer.\n\`${PREFIX}hug <@User>\` : Câliner.\n\`${PREFIX}kiss <@User>\` : Embrasser.\n\`${PREFIX}pat <@User>\` : Tapoter.\n\`${PREFIX}slap <@User>\` : Gifler.\n\`${PREFIX}poke <@User>\` : Titiller.` },
                     { name: '�️ Admin', value: `\`${PREFIX}adminfamily <Nom>\` : Gestion de dynastie.` }
                 );
             return message.reply({ embeds: [h] });
@@ -1005,7 +1105,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
             const marryEmbed = new EmbedBuilder()
                 .setTitle("💖 Demande en Mariage")
                 .setColor("#FF69B4")
-                .setDescription(`${formatMention(target.id)}, ${formatMention(authorId)} te demande en mariage !`)
+                .setDescription(`${formatMention(target.id)}, ${formatMention(authorId)} te demande en mariage !`) // Marriage proposal embed
                 .setFooter({ text: "Tu as 60 secondes pour répondre." });
 
             const row = new ActionRowBuilder().addComponents(
@@ -1013,7 +1113,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                 new ButtonBuilder().setCustomId('m_decline').setLabel('Refuser').setStyle(ButtonStyle.Danger)
             );
 
-            const msg = await message.reply({ content: `${formatMention(target.id)}`, embeds: [marryEmbed], components: [row] });
+            const msg = await message.reply({ content: `${formatMention(target.id)}`, embeds: [marryEmbed], components: [row] }); // Send proposal
 
             const collector = msg.createMessageComponentCollector({
                 filter: i => i.user.id === target.id,
@@ -1033,52 +1133,58 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                         return msg.delete();
                     }
 
+                    const userUpdates = []; // Collect user updates
+                    const familyUpdates = []; // Collect family updates
+
                     const authorHasFamily = !!currentAuthorData.familyName;
                     const targetHasFamily = !!currentTargetData.familyName;
 
                     let finalFamilyName = null;
 
                     if (!authorHasFamily && !targetHasFamily) {
-                        // Scenario 1: Both have no family - create a new one
-                        const newFamilyName = `${author.username.substring(0, 5)}-${target.username.substring(0, 5)}-famille`.toLowerCase();
-                        const family = await db.createFamily(newFamilyName, authorId);
-                        family.members.push(target.id);
-                        await db.updateFamily(newFamilyName, { members: family.members });
-                        await db.updateUser(authorId, { familyName: newFamilyName });
-                        await db.updateUser(target.id, { familyName: newFamilyName });
+                        // Scenario 1: Both have no family - create a new one for them
+                        const newFamilyName = `${message.author.username.substring(0, 5)}-${target.username.substring(0, 5)}-famille`.toLowerCase();
+                        familyUpdates.push(db.createFamily(newFamilyName, authorId)); // Create family
+                        userUpdates.push(db.updateUser(authorId, { familyName: newFamilyName }));
+                        userUpdates.push(db.updateUser(target.id, { familyName: newFamilyName }));
                         finalFamilyName = newFamilyName;
+                        await Promise.all(familyUpdates); // Ensure family is created before updating its members
+                        const family = await db.getFamily(newFamilyName); // Fetch the newly created family
+                        if (family && !family.members.includes(target.id)) {
+                            family.members.push(target.id);
+                            familyUpdates.push(db.updateFamily(newFamilyName, { members: family.members }));
+                        }
                         await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant mariés et ont fondé la famille **${newFamilyName.toUpperCase()}** !`, ephemeral: false });
                     } else if (authorHasFamily && !targetHasFamily) {
                         // Scenario 2: Author has family, target does not - target joins author's family
-                        await db.updateUser(target.id, { familyName: currentAuthorData.familyName });
+                        userUpdates.push(db.updateUser(target.id, { familyName: currentAuthorData.familyName }));
                         const authorFamily = await db.getFamily(currentAuthorData.familyName);
                         if (authorFamily && !authorFamily.members.includes(target.id)) {
                             authorFamily.members.push(target.id);
-                            await db.updateFamily(authorFamily._id, { members: authorFamily.members });
+                            familyUpdates.push(db.updateFamily(authorFamily._id, { members: authorFamily.members }));
                         }
                         finalFamilyName = currentAuthorData.familyName;
                         await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant mariés ! ${formatMention(target.id)} a rejoint la famille **${currentAuthorData.familyName.toUpperCase()}** !`, ephemeral: false });
                     } else if (!authorHasFamily && targetHasFamily) {
                         // Scenario 3: Target has family, author does not - author joins target's family
-                        await db.updateUser(authorId, { familyName: currentTargetData.familyName });
+                        userUpdates.push(db.updateUser(authorId, { familyName: currentTargetData.familyName }));
                         const targetFamily = await db.getFamily(currentTargetData.familyName);
                         if (targetFamily && !targetFamily.members.includes(authorId)) {
                             targetFamily.members.push(authorId);
-                            await db.updateFamily(targetFamily._id, { members: targetFamily.members });
+                            familyUpdates.push(db.updateFamily(targetFamily._id, { members: targetFamily.members }));
                         }
                         finalFamilyName = currentTargetData.familyName;
                         await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant mariés ! ${formatMention(authorId)} a rejoint la famille **${currentTargetData.familyName.toUpperCase()}** !`, ephemeral: false });
                     } else if (authorHasFamily && targetHasFamily && currentAuthorData.familyName !== currentTargetData.familyName) {
-                        // Scenario 4: Both have different families - merge families
-                        await mergeFamilies(currentAuthorData.familyName, currentTargetData.familyName, authorId, target.id, 'conjoint');
-                        finalFamilyName = currentAuthorData.familyName; // The invited family merges into the inviter's family
-                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant mariés et leurs familles ont fusionné en **${finalFamilyName.toUpperCase()}** !`, ephemeral: false });
+                        // Scenario 4: Both have different families - they stay in their respective families
+                        await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant mariés tout en gardant leurs lignées respectives !`, ephemeral: false });
                     } else if (authorHasFamily && targetHasFamily && currentAuthorData.familyName === currentTargetData.familyName) {
                         // Scenario 5: Both are in the same family but not married to each other
                         finalFamilyName = currentAuthorData.familyName;
                         await i.followUp({ content: `🎉 Félicitations ! ${formatMention(authorId)} et ${formatMention(target.id)} sont maintenant mariés au sein de la famille **${finalFamilyName.toUpperCase()}** !`, ephemeral: false });
                     }
-
+                    
+                    await Promise.all([...userUpdates, ...familyUpdates]); // Execute all collected updates
                     // Establish the spouse link
                     await executeLinkChange(authorId, target.id, 'conjoint', 'add');
 
@@ -1096,7 +1202,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
 
             collector.on('end', async (collected, reason) => {
                 if (reason === 'time') {
-                    await msg.delete().catch(() => {}); // Delete if timed out
+                    await msg.delete().catch(() => {}); // Delete if timed out, ignore if already deleted
                     await message.channel.send(`⌛ La demande en mariage de ${formatMention(authorId)} à ${formatMention(target.id)} a expiré.`);
                 }
             });
@@ -1112,7 +1218,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
         case 'info': {
             const targetUser = target || message.author;
             const userData = await db.getOrCreateUser(targetUser.id);
-            const family = userData.familyName ? await db.getFamily(userData.familyName) : null;
+            const family = userData.familyName ? await db.getFamily(userData.familyName) : null; // Fetch family if user has one
 
             const buildEmbed = () => new EmbedBuilder()
                 .setTitle(`Profil Familial - ${targetUser.username}`)
@@ -1127,7 +1233,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                     { name: '👩 Mère', value: userData.mother ? formatMention(userData.mother) : 'Inconnue', inline: true }
                 );
 
-            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('edit_p').setLabel('⚙️ Personnaliser').setStyle(ButtonStyle.Secondary));
+            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('edit_p').setLabel('⚙️ Personnaliser').setStyle(ButtonStyle.Secondary)); // Edit profile button
             const msg = await message.reply({ embeds: [buildEmbed()], components: targetUser.id === authorId ? [row] : [] });
             if (targetUser.id !== authorId) return;
 
@@ -1140,7 +1246,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                             { label: 'Mon Genre', value: 'gender' },
                             { label: 'Nom de Lignée', value: 'name' },
                             { label: 'Nom du Conjoint', value: 'spouse' }
-                        ]);
+                        ]); // Select menu for profile fields
                     return i.update({ content: "Que modifier ?", components: [new ActionRowBuilder().addComponents(menu)] });
                 }
                 if (i.values?.[0] === 'bio') {
@@ -1151,7 +1257,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                 if (i.values?.[0] === 'gender') {
                     const gRow = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('sel_gen').setPlaceholder('Genre...')
                         .addOptions([{ label: 'Masculin', value: 'masculin' }, { label: 'Féminin', value: 'féminin' }, { label: 'Autre', value: 'autre' }]));
-                    return i.update({ content: "Votre genre ?", components: [gRow] });
+                    return i.update({ content: "Votre genre ?", components: [gRow] }); // Select menu for gender
                 }
                 if (i.customId === 'sel_gen') {
                     await db.updateUser(authorId, { gender: i.values[0] });
@@ -1160,7 +1266,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                 if (i.values?.[0] === 'name') {
                     const modal = new ModalBuilder().setCustomId('modal_rename_branch').setTitle('Nom de Branche');
                     modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('new_name').setLabel("Nouveau nom").setStyle(TextInputStyle.Short).setRequired(true)));
-                    return i.showModal(modal);
+                    return i.showModal(modal); // Modal for renaming family/branch
                 }
                 if (i.values?.[0] === 'spouse') {
                     if (!authorData.spouse) return i.reply({ content: "Pas de conjoint.", flags: MessageFlags.Ephemeral });
@@ -1175,7 +1281,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
 
         case 'divorce': {
             if (!authorData.spouse) return message.reply('Tu n\'es pas marié(e).');
-            await executeLinkChange(authorId, authorData.spouse, null, 'remove');
+            await executeLinkChange(authorId, authorData.spouse, null, 'remove'); // Remove spouse link
             return message.reply(`💔 Tu as divorcé de ${formatMention(authorData.spouse)}.`);
         }
 
@@ -1187,7 +1293,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
             if (rel === 'soi-même') desc = `Tu te fais un câlin à toi-même ? C'est mignon mais un peu solitaire !`;
 
             const embed = new EmbedBuilder()
-                .setColor('#FFC0CB')
+                .setColor('#FFC0CB') // Pink color
                 .setDescription(desc)
                 .setImage('https://media.giphy.com/media/u9B3S2ArX9X5S/giphy.gif');
             return message.reply({ embeds: [embed] });
@@ -1199,7 +1305,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
                 return message.reply(`Désolé, mais tu ne peux embrasser que ton/ta conjoint(e) ! 💍`);
             }
             const embed = new EmbedBuilder()
-                .setColor('#FF0000')
+                .setColor('#FF0000') // Red color
                 .setDescription(`💋 ${formatMention(authorId)} embrasse amoureusement ${formatMention(target.id)} !`)
                 .setImage('https://media.giphy.com/media/G3va31WfEKhS8/giphy.gif');
             return message.reply({ embeds: [embed] });
@@ -1212,7 +1318,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
             if (['enfant', 'parent', 'frère/soeur'].includes(rel)) {
                 desc = `😊 ${formatMention(authorId)} tapote affectueusement la tête de son **${rel}**, ${formatMention(target.id)}.`;
             }
-            const embed = new EmbedBuilder()
+            const embed = new EmbedBuilder() // Light blue color
                 .setColor('#87CEEB')
                 .setDescription(desc)
                 .setImage('https://media.giphy.com/media/ARSp9T7wwxNcs/giphy.gif');
@@ -1224,7 +1330,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
             const rel = await areRelated(authorId, target.id); // Await async areRelated
             let desc = `💥 ${formatMention(authorId)} donne une gifle à ${formatMention(target.id)} !`;
             if (rel && rel !== 'soi-même') desc += ` Oh non, une dispute de famille entre **${rel}s** !`;
-            
+
             const embed = new EmbedBuilder()
                 .setColor('#FFA500')
                 .setDescription(desc)
@@ -1237,7 +1343,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
             const rel = await areRelated(authorId, target.id); // Await async areRelated
             let desc = `${formatMention(authorId)} donne un petit coup de doigt à ${formatMention(target.id)}.`;
             if (rel && rel !== 'soi-même') desc = `👉 ${formatMention(authorId)} embête son **${rel}**, ${formatMention(target.id)} !`;
-
+            
             const embed = new EmbedBuilder()
                 .setColor('#98FB98')
                 .setDescription(desc)
@@ -1250,7 +1356,7 @@ for (const mId of family.members) await db.updateUser(mId, { familyName: null, s
 
 client.on('interactionCreate', async (interaction) => {
     if (!interaction.isModalSubmit()) return;
-    
+
     if (interaction.customId === 'modal_create_fam') {
         const name = interaction.fields.getTextInputValue('fam_name').toLowerCase();
         if (await db.getFamily(name)) return interaction.reply({ content: "❌ Nom déjà pris.", flags: MessageFlags.Ephemeral });
@@ -1270,17 +1376,20 @@ client.on('interactionCreate', async (interaction) => {
         const uData = await db.getOrCreateUser(interaction.user.id);
         const oldName = uData.familyName;
         const family = oldName ? await db.getFamily(oldName) : null;
+        const updatePromises = [];
 
         if (family?.head === interaction.user.id) {
-            await db.createFamily(newName, interaction.user.id);
-            await db.updateFamily(newName, { members: family.members });
-            for (const mId of family.members) await db.updateUser(mId, { familyName: newName });
-            await db.deleteFamily(oldName);
+            updatePromises.push(db.createFamily(newName, interaction.user.id));
+            updatePromises.push(db.updateFamily(newName, { members: family.members }));
+            for (const mId of family.members) updatePromises.push(db.updateUser(mId, { familyName: newName }));
+            updatePromises.push(db.deleteFamily(oldName));
+            await Promise.all(updatePromises);
             await interaction.reply({ content: `✅ Dynastie renommée : **${newName.toUpperCase()}** !` });
         } else {
-            if (oldName && family) await db.updateFamily(oldName, { members: family.members.filter(id => id !== interaction.user.id) });
-            await db.createFamily(newName, interaction.user.id);
-            await db.updateUser(interaction.user.id, { familyName: newName });
+            if (oldName && family) updatePromises.push(db.updateFamily(oldName, { members: family.members.filter(id => id !== interaction.user.id) }));
+            updatePromises.push(db.createFamily(newName, interaction.user.id));
+            updatePromises.push(db.updateUser(interaction.user.id, { familyName: newName }));
+            await Promise.all(updatePromises);
             await propagateNameChange(interaction.user.id, oldName, newName);
             await interaction.reply({ content: `✅ Branche **${newName.toUpperCase()}** fondée !` });
         }

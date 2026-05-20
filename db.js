@@ -101,39 +101,94 @@ async function getAllFamilies() {
 
 async function clearUserFamilyLinksDB(userId) {
   const userData = await getOrCreateUser(userId);
+  const updates = []; // To store all updateUser promises
 
   if (userData.familyName) {
-    const family = await getFamily(userData.familyName);
+    let family = await getFamily(userData.familyName);
+    
+    // Collect all unique IDs that need to be fetched for cleaning up pointers
+    const idsToFetch = new Set();
+    if (userData.spouse) {
+      idsToFetch.add(userData.spouse);
+    }
+    if (userData.father) {
+      idsToFetch.add(userData.father);
+    }
+    if (userData.mother) {
+      idsToFetch.add(userData.mother);
+    }
+    if (userData.children && userData.children.length > 0) {
+      userData.children.forEach(childId => idsToFetch.add(childId));
+    }
+    if (family && family.members) {
+      family.members.forEach(memberId => idsToFetch.add(memberId));
+    }
+    idsToFetch.delete(userId); // Don't re-fetch current user
+
+    const fetchedUsersData = {};
+    await Promise.all(Array.from(idsToFetch).map(async (id) => {
+      fetchedUsersData[id] = await getOrCreateUser(id);
+    }));
+
+    // Clean up pointers in other users (Spouse, Parents, Children)
+    if (userData.spouse) {
+      updates.push(updateUser(userData.spouse, { spouse: null }));
+    }
+    if (userData.father) {
+      const fatherData = fetchedUsersData[userData.father];
+      if (fatherData) {
+        const updatedChildren = fatherData.children.filter(id => id !== userId);
+        updates.push(updateUser(userData.father, { children: updatedChildren }));
+      }
+    }
+    if (userData.mother) {
+      const motherData = fetchedUsersData[userData.mother];
+      if (motherData) {
+        const updatedChildren = motherData.children.filter(id => id !== userId);
+        updates.push(updateUser(userData.mother, { children: updatedChildren }));
+      }
+    }
+    if (userData.children && userData.children.length > 0) {
+      for (const childId of userData.children) {
+        const childData = fetchedUsersData[childId];
+        if (childData) {
+          let update = {};
+          if (childData.father === userId) update.father = null;
+          if (childData.mother === userId) update.mother = null;
+          if (Object.keys(update).length > 0) updates.push(updateUser(childId, update));
+        }
+      }
+    }
+
     if (family) {
-      family.members = family.members.filter(id => id !== userId);
+      const updatedMembers = family.members.filter(id => id !== userId);
       if (family.head === userId) {
-        if (family.members.length === 0) {
-          await deleteFamily(family._id);
+        if (updatedMembers.length === 0) {
+          updates.push(deleteFamily(family._id));
         } else {
             // Logique de succession : on cherche les membres sans parents dans la famille (les plus "vieux")
-            const results = await Promise.all(family.members.map(async mId => {
-                const mData = await getOrCreateUser(mId);
-                const hasParentInFamily = (mData.mother && family.members.includes(mData.mother)) || 
-                                          (mData.father && family.members.includes(mData.father));
+            const results = updatedMembers.map(mId => {
+                const mData = fetchedUsersData[mId]; // Use pre-fetched data
+                const hasParentInFamily = (mData?.mother && family.members.includes(mData.mother)) ||
+                                          (mData?.father && family.members.includes(mData.father));
                 return { mId, isPotential: !hasParentInFamily };
-            }));
+            });
             
-            const potentialHeads = results.filter(r => r.isPotential).map(r => r.mId);
-
-            if (potentialHeads.length > 0) {
-                family.head = potentialHeads[Math.floor(Math.random() * potentialHeads.length)];
-            } else {
-                family.head = family.members[Math.floor(Math.random() * family.members.length)];
-            }
-            await updateFamily(family._id, { head: family.head, members: family.members });
+            const potential = results.filter(r => r.isPotential).map(r => r.mId);
+            const newHead = potential.length > 0 
+                ? potential[Math.floor(Math.random() * potential.length)] 
+                : updatedMembers[0];
+                
+            updates.push(updateFamily(family._id, { head: newHead, members: updatedMembers }));
         }
       } else {
-        await updateFamily(family._id, { members: family.members });
+        updates.push(updateFamily(family._id, { members: updatedMembers }));
       }
     }
   }
 
-  await updateUser(userId, { spouse: null, children: [], mother: null, father: null, customLinks: {}, familyName: null });
+  updates.push(updateUser(userId, { spouse: null, children: [], mother: null, father: null, customLinks: {}, familyName: null }));
+  await Promise.all(updates); // Execute all updates concurrently
 }
 
 module.exports = {
