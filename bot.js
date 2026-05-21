@@ -29,8 +29,14 @@ require('dotenv').config();
 const PREFIX = process.env.PREFIX || ',';
 
 // Required for image generation - make sure to install 'canvas' package: npm install canvas
-const { createCanvas, loadImage, registerFont } = require('canvas');
-// registerFont('./fonts/arial.ttf', { family: 'Arial' }); // Example: register a font if needed
+let CanvasLib;
+try {
+    CanvasLib = require('canvas');
+} catch (err) {
+    console.warn("⚠️ Le module 'canvas' n'est pas installé. Les arbres généalogiques visuels seront désactivés.");
+    console.warn("👉 Pour corriger cela, exécutez : npm install canvas");
+    CanvasLib = null;
+}
 
 const ROLES_LIST = [
     'père', 'mère', 'enfant', 'frère', 'soeur', 
