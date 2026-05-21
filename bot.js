@@ -28,16 +28,6 @@ require('dotenv').config();
 
 const PREFIX = process.env.PREFIX || ',';
 
-// Required for image generation - make sure to install 'canvas' package: npm install canvas
-let CanvasLib;
-try {
-    CanvasLib = require('canvas');
-} catch (err) {
-    console.warn("⚠️ Le module 'canvas' n'est pas installé. Les arbres généalogiques visuels seront désactivés.");
-    console.warn("👉 Pour corriger cela, exécutez : npm install canvas");
-    CanvasLib = null;
-}
-
 const ROLES_LIST = [
     'père', 'mère', 'enfant', 'frère', 'soeur', 
     'oncle', 'tante', 'cousin', 'cousine',
@@ -55,92 +45,70 @@ function formatMention(id) {
 
 // --- Visual Tree Generator ---
 async function generateFamilyImage(client, userId) {
-    if (!CanvasLib) return null;
-    const { createCanvas } = CanvasLib;
-
     const user = await db.getOrCreateUser(userId);
     const discordUser = await client.users.fetch(userId).catch(() => null);
     const username = discordUser ? discordUser.username : `ID: ${userId}`;
 
-    // Canvas setup
-    const width = 1000;
-    const height = 650;
-    const canvas = createCanvas(width, height);
-    const ctx = canvas.getContext('2d');
+    const relatedIds = new Set();
+    if (user.spouse) relatedIds.add(user.spouse);
+    if (user.father) relatedIds.add(user.father);
+    if (user.mother) relatedIds.add(user.mother);
+    if (user.children) user.children.forEach(id => relatedIds.add(id));
 
-    // Background (Discord Dark Theme style)
-    ctx.fillStyle = '#23272a';
-    ctx.fillRect(0, 0, width, height);
+    const nameMap = new Map();
+    nameMap.set(userId, username);
 
-    const nodeW = 160;
-    const nodeH = 50;
-    const centerX = width / 2;
-    const centerY = height / 2;
+    await Promise.all(Array.from(relatedIds).map(async id => {
+        const u = await client.users.fetch(id).catch(() => null);
+        nameMap.set(id, u ? u.username : `ID: ${id}`);
+    }));
 
-    function drawNode(x, y, text, color = '#7289da') {
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        if (ctx.roundRect) ctx.roundRect(x - nodeW / 2, y - nodeH / 2, nodeW, nodeH, 10);
-        else ctx.rect(x - nodeW / 2, y - nodeH / 2, nodeW, nodeH);
-        ctx.fill();
-        ctx.strokeStyle = '#ffffff';
-        ctx.lineWidth = 2;
-        ctx.stroke();
-        
-        ctx.fillStyle = '#ffffff';
-        ctx.font = 'bold 14px Arial';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'middle';
-        ctx.fillText(text.length > 18 ? text.substring(0, 15) + "..." : text, x, y);
-    }
+    const esc = (s) => s.replace(/"/g, '\\"');
 
-    function drawLink(x1, y1, x2, y2) {
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
-        ctx.lineWidth = 2;
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.stroke();
-    }
+    // Construction du graphe au format Graphviz DOT pour QuickChart
+    let dot = `digraph G {
+        graph [bgcolor="#23272a", pad="0.5", nodesep="0.6", ranksep="1"];
+        node [shape=box, style="filled,rounded", color="#ffffff", fontcolor="#ffffff", fontname="Arial", fontsize="12", height="0.5", width="1.8"];
+        edge [color="#ffffff66", penwidth="2", arrowhead="none"];
 
-    // Title
-    ctx.fillStyle = '#ffffff';
-    ctx.font = '24px Arial';
-    ctx.textAlign = 'center';
-    ctx.fillText(`Dynastie de ${username}`, centerX, 40);
+        "${esc(username)}" [fillcolor="#7289da", penwidth="4"];
+    `;
 
-    // Draw Main User (Center)
-    drawNode(centerX, centerY, username, '#7289da');
-
-    // Spouse (Right of center)
     if (user.spouse) {
-        const spouseX = centerX + nodeW + 60;
-        const sUser = await client.users.fetch(user.spouse).catch(() => null);
-        drawLink(centerX, centerY, spouseX, centerY);
-        drawNode(spouseX, centerY, sUser ? sUser.username : "Conjoint(e)", '#e91e63');
+        const spouseName = nameMap.get(user.spouse);
+        dot += `"${esc(spouseName)}" [fillcolor="#e91e63"];\n`;
+        dot += `{rank=same; "${esc(username)}"; "${esc(spouseName)}"};\n`;
+        dot += `"${esc(username)}" -> "${esc(spouseName)}" [dir=none, color="#e91e63", label=" ❤️ "];\n`;
     }
 
-    // Parents (Top)
-    const parents = [user.father, user.mother].filter(Boolean);
-    for (let i = 0; i < parents.length; i++) {
-        const pX = centerX + (i - (parents.length - 1) / 2) * (nodeW + 40);
-        const pY = centerY - 150;
-        const pUser = await client.users.fetch(parents[i]).catch(() => null);
-        drawLink(centerX, centerY, pX, pY);
-        drawNode(pX, pY, pUser ? pUser.username : "Parent", '#9b59b6');
+    if (user.father) {
+        const fName = nameMap.get(user.father);
+        dot += `"${esc(fName)}" -> "${esc(username)}";\n`;
+        dot += `"${esc(fName)}" [fillcolor="#9b59b6"];\n`;
+    }
+    if (user.mother) {
+        const mName = nameMap.get(user.mother);
+        dot += `"${esc(mName)}" -> "${esc(username)}";\n`;
+        dot += `"${esc(mName)}" [fillcolor="#9b59b6"];\n`;
     }
 
-    // Children (Bottom)
-    const children = user.children || [];
-    for (let i = 0; i < children.length; i++) {
-        const cX = centerX + (i - (children.length - 1) / 2) * (nodeW + 40);
-        const cY = centerY + 150;
-        const cUser = await client.users.fetch(children[i]).catch(() => null);
-        drawLink(centerX, centerY, cX, cY);
-        drawNode(cX, cY, cUser ? cUser.username : "Enfant", '#2ecc71');
+    if (user.children && user.children.length > 0) {
+        user.children.forEach(cid => {
+            const cName = nameMap.get(cid);
+            dot += `"${esc(username)}" -> "${esc(cName)}";\n`;
+            dot += `"${esc(cName)}" [fillcolor="#2ecc71"];\n`;
+        });
     }
 
-    return canvas.toBuffer('image/png');
+    dot += "}";
+
+    try {
+        const response = await axios.post('https://quickchart.io/graphviz', { format: 'png', graph: dot }, { responseType: 'arraybuffer' });
+        return Buffer.from(response.data);
+    } catch (e) {
+        console.error("QuickChart Error:", e.message);
+        return null;
+    }
 }
 
 // This function now needs to be async as it fetches data from DB
@@ -732,7 +700,7 @@ client.on('messageCreate', async (message) => {
                 if (action === 'lineage') {
                     const buffer = await generateFamilyImage(client, family.head);
                     if (!buffer) return i.reply({ 
-                        content: "⚠️ Le rendu visuel est désactivé (module 'canvas' absent).", 
+                        content: "⚠️ Impossible de générer l'image (service externe indisponible).", 
                         ephemeral: true });
                     return i.reply({ files: [new AttachmentBuilder(buffer, { name: 'family.png' })], ephemeral: true });
                 }
@@ -860,7 +828,7 @@ client.on('messageCreate', async (message) => {
                 if (buffer) {
                     embed.setImage('attachment://family.png');
                     files = [new AttachmentBuilder(buffer, { name: 'family.png' })];
-                } else embed.setDescription("⚠️ Impossible de générer l'image (module 'canvas' absent).");
+                } else embed.setDescription("⚠️ Impossible de générer l'image.");
                 
                 embed.addFields( // Add fields for family details
                         { name: '👑 Chef de Lignée', value: family?.head ? formatMention(family.head) : 'Inconnu', inline: true },
@@ -928,7 +896,7 @@ client.on('messageCreate', async (message) => {
                 if (action === 'lineage') { // Display user's family tree
                     const buffer = await generateFamilyImage(client, authorId);
                     if (!buffer) return i.reply({ 
-                        content: "⚠️ Le rendu visuel est désactivé (module 'canvas' absent).", 
+                        content: "⚠️ Impossible de générer l'image (service externe indisponible).", 
                         ephemeral: true });
                     return i.reply({ files: [new AttachmentBuilder(buffer, { name: 'family.png' })], ephemeral: true });
                 }
