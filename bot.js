@@ -53,126 +53,92 @@ function formatMention(id) {
     return `<@${id}>`;
 }
 
-// --- UnbelievaBoat API Helper ---
-// Configuration de l'instance Axios pour communiquer directement avec l'API v1
-const ubApi = axios.create({
-    baseURL: 'https://unbelievaboat.com/api/v1',
-    headers: { 
-        'Authorization': process.env.UNBELIEVABOAT_TOKEN,
-        'Accept': 'application/json'
-    }
-});
-
-async function getUBUser(guildId, userId) {
-    if (!process.env.UNBELIEVABOAT_TOKEN) return null;
-    try {
-        const res = await ubApi.get(`/guilds/${guildId}/users/${userId}`);
-        return res.data;
-    } catch (e) { 
-        console.error(`Erreur API UnbelievaBoat pour l'utilisateur ${userId}:`, e.response?.status || e.message);
-        return null; 
-    }
-}
-
-async function updateUBBalance(guildId, userId, cashDelta) {
-    if (!process.env.UNBELIEVABOAT_TOKEN) return false;
-    try {
-        await ubApi.patch(`/guilds/${guildId}/users/${userId}`, { cash: cashDelta });
-        return true;
-    } catch (e) { 
-        return false; 
-    }
-}
-
-// --- Text-based Tree Generator (Fallback) ---
-async function generateFamilyText(client, userId, prefix = "", isLast = true, visited = new Set()) {
-    if (visited.has(userId)) return "";
-    visited.add(userId);
-
-    const userData = await db.getOrCreateUser(userId);
-    const user = client.users.cache.get(userId) || await client.users.fetch(userId).catch(() => null);
-    const name = user ? user.username : userId;
-    
-    let spouseInfo = "";
-    if (userData.spouse) {
-        const spouseUser = client.users.cache.get(userData.spouse) || await client.users.fetch(userData.spouse).catch(() => null);
-        spouseInfo = ` ❤️ ${spouseUser ? spouseUser.username : userData.spouse}`;
-    }
-    let result = prefix + (isLast ? "└── " : "├── ") + name + spouseInfo + "\n";
-    
-    const children = userData.children || [];
-    for (let i = 0; i < children.length; i++) {
-        const newPrefix = prefix + (isLast ? "    " : "│   ");
-        result += await generateFamilyText(client, children[i], newPrefix, i === children.length - 1, visited);
-    }
-    
-    return result;
-}
-
-// --- Visual Tree Generator (Disabled) ---
-async function generateFamilyImage(client, userId) { // Re-enabling and providing a basic structure
-    // This function is intended to generate a visual family tree image.
-    // Implementing a comprehensive, aesthetically pleasing, and logically correct family tree
-    // with all requested relationships (generations, siblings, aunts/uncles, grandparents)
-    // is a highly complex task. It typically requires:
-    // 1. A robust graph layout algorithm to position nodes (family members) correctly.
-    //    Libraries like 'dagre' (for directed acyclic graphs) or 'graphviz' (via a wrapper)
-    //    are often used for this, but integrating them can be challenging.
-    // 2. A drawing library like 'node-canvas' to render the nodes, edges, and text onto an image.
-    //
-    // The current implementation provides a basic placeholder structure that draws the main user.
-    // To fully meet the requirements (generations, aunts/uncles, grandparents, siblings),
-    // significant development effort is needed here to implement the layout and drawing logic.
-
-    // Ensure 'canvas' is installed (npm install canvas) and uncomment the import at the top.
-    // The `registerFont` line might be needed if you want custom fonts.
+// --- Visual Tree Generator ---
+async function generateFamilyImage(client, userId) {
+    if (!CanvasLib) return null;
+    const { createCanvas } = CanvasLib;
 
     const user = await db.getOrCreateUser(userId);
     const discordUser = await client.users.fetch(userId).catch(() => null);
     const username = discordUser ? discordUser.username : `ID: ${userId}`;
 
     // Canvas setup
-    const canvasWidth = 800;
-    const canvasHeight = 600;
-    const canvas = createCanvas(canvasWidth, canvasHeight);
+    const width = 1000;
+    const height = 650;
+    const canvas = createCanvas(width, height);
     const ctx = canvas.getContext('2d');
 
-    // Background
-    ctx.fillStyle = '#FFFFFF';
-    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+    // Background (Discord Dark Theme style)
+    ctx.fillStyle = '#23272a';
+    ctx.fillRect(0, 0, width, height);
+
+    const nodeW = 160;
+    const nodeH = 50;
+    const centerX = width / 2;
+    const centerY = height / 2;
+
+    function drawNode(x, y, text, color = '#7289da') {
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        if (ctx.roundRect) ctx.roundRect(x - nodeW / 2, y - nodeH / 2, nodeW, nodeH, 10);
+        else ctx.rect(x - nodeW / 2, y - nodeH / 2, nodeW, nodeH);
+        ctx.fill();
+        ctx.strokeStyle = '#ffffff';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+        
+        ctx.fillStyle = '#ffffff';
+        ctx.font = 'bold 14px Arial';
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(text.length > 18 ? text.substring(0, 15) + "..." : text, x, y);
+    }
+
+    function drawLink(x1, y1, x2, y2) {
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+    }
 
     // Title
-    ctx.fillStyle = '#000000';
-    ctx.font = '24px Arial'; // Using a common font, ensure it's available or registered
+    ctx.fillStyle = '#ffffff';
+    ctx.font = '24px Arial';
     ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillText(`Arbre Généalogique de ${username}`, canvasWidth / 2, 20);
+    ctx.fillText(`Dynastie de ${username}`, centerX, 40);
 
-    // --- Placeholder for drawing the main user (center of the canvas) ---
-    const nodeWidth = 180;
-    const nodeHeight = 60;
-    const startX = (canvasWidth - nodeWidth) / 2;
-    const startY = (canvasHeight - nodeHeight) / 2;
+    // Draw Main User (Center)
+    drawNode(centerX, centerY, username, '#7289da');
 
-    // Draw node rectangle
-    ctx.fillStyle = '#3498db'; // Blue
-    ctx.fillRect(startX, startY, nodeWidth, nodeHeight);
-    ctx.strokeStyle = '#2c3e50'; // Darker blue border
-    ctx.lineWidth = 2;
-    ctx.strokeRect(startX, startY, nodeWidth, nodeHeight);
+    // Spouse (Right of center)
+    if (user.spouse) {
+        const spouseX = centerX + nodeW + 60;
+        const sUser = await client.users.fetch(user.spouse).catch(() => null);
+        drawLink(centerX, centerY, spouseX, centerY);
+        drawNode(spouseX, centerY, sUser ? sUser.username : "Conjoint(e)", '#e91e63');
+    }
 
-    // Draw username
-    ctx.fillStyle = '#FFFFFF'; // White text
-    ctx.font = '18px Arial';
-    ctx.fillText(username, startX + nodeWidth / 2, startY + nodeHeight / 2);
+    // Parents (Top)
+    const parents = [user.father, user.mother].filter(Boolean);
+    for (let i = 0; i < parents.length; i++) {
+        const pX = centerX + (i - (parents.length - 1) / 2) * (nodeW + 40);
+        const pY = centerY - 150;
+        const pUser = await client.users.fetch(parents[i]).catch(() => null);
+        drawLink(centerX, centerY, pX, pY);
+        drawNode(pX, pY, pUser ? pUser.username : "Parent", '#9b59b6');
+    }
 
-    // --- Further logic would go here to: ---
-    // 1. Fetch extended family data (parents, spouse, children, siblings, grandparents, aunts/uncles).
-    //    The `getExtendedFamily(userId)` function already provides much of this data.
-    // 2. Implement a layout algorithm to determine (x, y) coordinates for all nodes based on relationships.
-    //    This is the most challenging part for a complex tree.
-    // 3. Draw all additional nodes and connect them with lines (edges) representing relationships.
-    // 4. Add labels for roles (e.g., "Père", "Mère", "Conjoint") on or near the lines.
+    // Children (Bottom)
+    const children = user.children || [];
+    for (let i = 0; i < children.length; i++) {
+        const cX = centerX + (i - (children.length - 1) / 2) * (nodeW + 40);
+        const cY = centerY + 150;
+        const cUser = await client.users.fetch(children[i]).catch(() => null);
+        drawLink(centerX, centerY, cX, cY);
+        drawNode(cX, cY, cUser ? cUser.username : "Enfant", '#2ecc71');
+    }
 
     return canvas.toBuffer('image/png');
 }
@@ -765,10 +731,9 @@ client.on('messageCreate', async (message) => {
 
                 if (action === 'lineage') {
                     const buffer = await generateFamilyImage(client, family.head);
-                    if (!buffer) {
-                        const textTree = await generateFamilyText(client, family.head);
-                        return i.reply({ content: `🌳 **Arbre de la famille :**\n\`\`\`\n${textTree}\n\`\`\``, ephemeral: true });
-                    }
+                    if (!buffer) return i.reply({ 
+                        content: "⚠️ Le rendu visuel est désactivé (module 'canvas' absent).", 
+                        ephemeral: true });
                     return i.reply({ files: [new AttachmentBuilder(buffer, { name: 'family.png' })], ephemeral: true });
                 }
                 if (action === 'full') { // Display all members of the family
@@ -895,10 +860,7 @@ client.on('messageCreate', async (message) => {
                 if (buffer) {
                     embed.setImage('attachment://family.png');
                     files = [new AttachmentBuilder(buffer, { name: 'family.png' })];
-                } else {
-                    const textTree = await generateFamilyText(client, targetId);
-                    embed.setDescription(`🌳 **Arbre (Mode Texte - Simplifié) :**\n\`\`\`\n${textTree}\n\`\`\``);
-                }
+                } else embed.setDescription("⚠️ Impossible de générer l'image (module 'canvas' absent).");
                 
                 embed.addFields( // Add fields for family details
                         { name: '👑 Chef de Lignée', value: family?.head ? formatMention(family.head) : 'Inconnu', inline: true },
@@ -965,10 +927,9 @@ client.on('messageCreate', async (message) => {
 
                 if (action === 'lineage') { // Display user's family tree
                     const buffer = await generateFamilyImage(client, authorId);
-                    if (!buffer) {
-                        const textTree = await generateFamilyText(client, authorId);
-                        return i.reply({ content: `🌳 **Votre Arbre (Simplifié) :**\n\`\`\`\n${textTree}\n\`\`\``, ephemeral: true });
-                    }
+                    if (!buffer) return i.reply({ 
+                        content: "⚠️ Le rendu visuel est désactivé (module 'canvas' absent).", 
+                        ephemeral: true });
                     return i.reply({ files: [new AttachmentBuilder(buffer, { name: 'family.png' })], ephemeral: true });
                 }
                 if (action === 'full') { // Display all members of user's family
